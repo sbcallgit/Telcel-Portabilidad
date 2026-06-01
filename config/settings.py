@@ -29,8 +29,14 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://redis:6379"
 
-    # Anthropic
-    anthropic_api_key: str = ""
+    # OpenRouter (LLM gateway — compatible con API de OpenAI)
+    openrouter_api_key: str = ""
+    openrouter_model: str = "anthropic/claude-sonnet-4-5"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+
+    # Telegram (para pruebas — no requiere aprobación de Meta)
+    telegram_bot_token: str = ""
+    telegram_webhook_secret: str = "tg_webhook_secret_dev"
 
     # App
     app_version: str = "1.0.0"

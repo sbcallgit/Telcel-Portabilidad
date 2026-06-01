@@ -6,6 +6,7 @@ from typing import AsyncGenerator
 from fastapi import FastAPI, Request, Response
 
 from api.routes.health import router as health_router
+from api.routes.telegram import router as telegram_router
 from api.routes.webhooks import router as webhooks_router
 from config.logging import setup_logging
 from config.settings import settings
@@ -49,3 +50,4 @@ async def log_requests(request: Request, call_next: object) -> Response:
 
 app.include_router(health_router)
 app.include_router(webhooks_router)
+app.include_router(telegram_router)
