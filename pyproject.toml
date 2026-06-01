@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bot-telcel-portabilidad"
+version = "1.0.0"
+description = "Bot de portabilidad Telcel R4 — Campaña Muévete Prepago"
+requires-python = ">=3.12"
+
+dependencies = [
+    # API
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+
+    # Configuración y validación
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.4.0",
+
+    # HTTP y reintentos
+    "httpx>=0.27.0",
+    "tenacity>=9.0.0",
+
+    # Base de datos
+    "asyncpg>=0.29.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "alembic>=1.13.0",
+
+    # IA / Agente
+    "langgraph>=0.2.0",
+    "langchain-anthropic>=0.2.0",
+    "anthropic>=0.34.0",
+
+    # Cola de mensajes
+    "arq>=0.26.0",
+
+    # Jobs programados
+    "apscheduler>=3.10.0",
+    "pytz>=2024.1",
+
+    # Logging estructurado
+    "python-json-logger>=2.0.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.6.0",
+    "mypy>=1.11.0",
+    "freezegun>=1.5.0",
+    "pre-commit>=3.8.0",
+    "httpx>=0.27.0",  # para TestClient de FastAPI
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = false
+ignore_missing_imports = true
+warn_return_any = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=. --cov-report=term-missing --cov-omit=tests/*,*/__init__.py"
+
+[tool.coverage.run]
+omit = ["tests/*", "*/__init__.py", "*/migrations/*"]
