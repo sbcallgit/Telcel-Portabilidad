@@ -1,0 +1,60 @@
+# Caddyfile
+
+# API RAG
+rag-portabilidad.callcomcc.io {
+    reverse_proxy api:8001
+
+    # API Key auth simple (opcional)
+    @noauth {
+        not header Authorization "Bearer a3f8c2e1d4b7a9f0e2c5d8b1a4f7c0e3d6b9a2f5c8e1d4b7a0f3c6e9d2b5a8f1"
+        not path /health
+    }
+    respond @noauth 401 {
+        body "Unauthorized"
+        close
+    }
+
+    header {
+        # CORS para n8n u otros clientes
+        Access-Control-Allow-Origin "https://rag-portabilidad.callcomcc.io"
+        Access-Control-Allow-Headers "Authorization, Content-Type"
+        Access-Control-Allow-Methods "POST, GET, OPTIONS"
+        -Server
+    }
+
+    log {
+        output file /data/logs/rag.log
+        format json
+    }
+}
+
+
+# Qdrant dashboard (vector DB)
+qdrant.callcomcc.io {
+    reverse_proxy qdrant:6334 {
+        header_up Host {upstream_hostport}
+    }
+
+    basicauth {
+        admin $2a$14$LYvJ.pm9oxDP4Qf8lHovW.jW/NrAQRZs/HZ/L3VFWx9AnEa9pL8gO
+    }
+
+    header {
+        -Server
+    }
+}
+
+
+# Telegram webhook + API
+telegram-portabilidad.callcomcc.io {
+    reverse_proxy api:8001 {
+        header_up Host {upstream_hostport}
+    }
+
+    header {
+        -Server
+        Access-Control-Allow-Origin *
+        Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+        Access-Control-Allow-Headers "Authorization, Content-Type"
+    }
+}
