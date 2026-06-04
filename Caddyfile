@@ -30,12 +30,12 @@ rag-portabilidad.callcomcc.io {
 
 
 # Qdrant dashboard (vector DB)
-qdrant.callcomcc.io {
-    reverse_proxy qdrant:6334 {
+qdrant-portabilidad.callcomcc.io {
+    reverse_proxy qdrant:6333 {
         header_up Host {upstream_hostport}
     }
 
-    basicauth {
+    basic_auth {
         admin $2a$14$LYvJ.pm9oxDP4Qf8lHovW.jW/NrAQRZs/HZ/L3VFWx9AnEa9pL8gO
     }
 

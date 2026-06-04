@@ -70,10 +70,38 @@ CREATE TABLE IF NOT EXISTS leads (
 
 CREATE TABLE IF NOT EXISTS seguimientos_fallidos (
     id SERIAL PRIMARY KEY,
-    lead_id INTEGER REFERENCES leads(id),
+    lead_id INTEGER REFERENCES leads(id) UNIQUE,
     error TEXT NOT NULL,
     intentos INTEGER NOT NULL DEFAULT 0,
     ultimo_intento TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     requiere_revision BOOLEAN NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS seguimientos_log (
+    id SERIAL PRIMARY KEY,
+    lead_id INTEGER REFERENCES leads(id),
+    etapa VARCHAR(50) NOT NULL DEFAULT '',
+    numero_seq INTEGER NOT NULL DEFAULT 1,
+    enviado_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE leads
+  ADD COLUMN IF NOT EXISTS seguimientos_enviados INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS ultimo_seguimiento TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS paquetes_asl (
+    id SERIAL PRIMARY KEY,
+    monto INTEGER NOT NULL UNIQUE,
+    datos_mb INTEGER NOT NULL DEFAULT 0,
+    vigencia_dias INTEGER NOT NULL,
+    redes_ilimitadas BOOLEAN NOT NULL DEFAULT false,
+    bolsa_redes_mb INTEGER NOT NULL DEFAULT 0,
+    redes_bolsa TEXT NOT NULL DEFAULT '',
+    whatsapp_ilimitado BOOLEAN NOT NULL DEFAULT true,
+    amazon_prime TEXT,
+    claro_musica_mb INTEGER NOT NULL DEFAULT 0,
+    claro_drive_gb INTEGER NOT NULL DEFAULT 0,
+    notas TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 """

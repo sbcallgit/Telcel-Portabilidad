@@ -7,14 +7,14 @@ services:
       - .env
     environment:
       - DB_HOST=postgres
-      - REDIS_URL=redisPorta://redis:6380
+      - REDIS_URL=redis://redis:6379
     depends_on:
       postgres:
         condition: service_healthy
-      redisPorta:
+      redis:
         condition: service_healthy
     networks:
-      - bot_network
+      - portabilidad_net
     restart: unless-stopped
 
   postgres:
@@ -31,7 +31,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - bot_network
+      - portabilidad_net
     restart: unless-stopped
 
   redis:
@@ -44,26 +44,12 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - bot_network
+      - portabilidad_net
     restart: unless-stopped
 
-caddy:
-    image: caddy:2-alpine
-    ports:
-      - "81:80"
-      - "445:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - portabilidad_caddy_config:/config
-    depends_on:
-      - api
-
-    networks:
-      - portabilidad_net
-
-qdrant:
+  qdrant:
     image: qdrant/qdrant:latest
-    container_name: bot_megacable_qdrant
+    container_name: bot_telcel_qdrant
     restart: unless-stopped
     ports:
       - "${QDRANT_PORT:-6334}:6333"
@@ -82,10 +68,8 @@ qdrant:
 networks:
   portabilidad_net:
     driver: bridge
-      
+
 volumes:
   portabilidad_postgres_data:
   portabilidad_redis_data:
   portabilidad_qdrant_data:
-  portabilidad_caddy_data:
-  portabilidad_caddy_config:

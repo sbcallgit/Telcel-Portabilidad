@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     logger.info("app_startup", extra={"version": settings.app_version, "env": settings.environment})
+    from integrations.postgres.client import close_pool, create_pool
+    await create_pool()
     yield
+    await close_pool()
     logger.info("app_shutdown")
 
 

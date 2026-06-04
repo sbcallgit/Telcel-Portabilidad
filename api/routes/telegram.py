@@ -1,7 +1,9 @@
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from langchain_core.messages import AIMessage, HumanMessage
 
+from agents.portabilidad.graph import agent_graph
 from config.settings import settings
 from integrations.telegram.client import TelegramClient
 from integrations.telegram.handlers import parse_update
@@ -14,7 +16,7 @@ _tg = TelegramClient()
 
 @router.post("/webhooks/telegram", status_code=200)
 async def telegram_webhook(request: Request) -> dict:
-    """Recibe updates de Telegram. Valida el secret y procesa el mensaje."""
+    """Recibe updates de Telegram, valida el secret y procesa con el agente."""
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
     if secret != settings.telegram_webhook_secret:
         logger.warning("telegram_webhook_invalid_secret")
@@ -26,27 +28,51 @@ async def telegram_webhook(request: Request) -> dict:
     if msg is None:
         return {"status": "ignored"}
 
-    logger.info(
-        "telegram_message_received",
-        extra={"chat_id": msg.chat_id, "text_len": len(msg.text)},
-    )
+    logger.info("telegram_message_received", extra={"chat_id": msg.chat_id, "text_len": len(msg.text)})
 
-    # TODO Día 3: enrutar al agente LangGraph con msg.phone como session_id
-    # Por ahora el bot hace eco para confirmar que el canal funciona
-    await _tg.send_message(msg.chat_id, f"[PRUEBA] Recibí: {msg.text}")
+    config = {"configurable": {"thread_id": str(msg.chat_id)}}
+
+    try:
+        result = await agent_graph.ainvoke(
+            {
+                "messages": [HumanMessage(content=msg.text)],
+                "session_id": str(msg.chat_id),
+                "customer_phone": msg.phone,
+            },
+            config=config,
+        )
+
+        # Enviar solo las burbujas nuevas (AIMessages después del último HumanMessage)
+        all_messages = result.get("messages", [])
+        new_ai: list[AIMessage] = []
+        for m in reversed(all_messages):
+            if isinstance(m, HumanMessage):
+                break
+            if isinstance(m, AIMessage) and m.content and m.content != "(procesando objeción)":
+                new_ai.insert(0, m)
+
+        for ai_msg in new_ai:
+            try:
+                await _tg.send_message(msg.chat_id, ai_msg.content)
+            except Exception as send_exc:
+                logger.error("telegram_send_error", extra={"error": str(send_exc), "chat_id": msg.chat_id})
+                break
+
+    except Exception as exc:
+        logger.error("agent_error", extra={"error": str(exc), "chat_id": msg.chat_id})
+        try:
+            await _tg.send_message(msg.chat_id, "Hubo un problema técnico. Intenta de nuevo en un momento.")
+        except Exception:
+            pass  # No podemos enviar el error si el canal está caído
 
     return {"status": "ok"}
 
 
 @router.post("/webhooks/telegram/setup")
 async def setup_telegram_webhook(
-    url: str = Query(description="URL pública del webhook, ej: https://abc.ngrok.io"),
+    url: str = Query(description="URL pública del webhook, ej: https://telegram-portabilidad.callcomcc.io"),
 ) -> dict:
-    """Registra el webhook en Telegram. Llamar una vez al configurar el bot.
-
-    Requiere una URL pública (usar ngrok en desarrollo local).
-    Ejemplo: POST /webhooks/telegram/setup?url=https://abc.ngrok.io
-    """
+    """Registra el webhook en Telegram. Llamar una vez al configurar el entorno."""
     if not settings.telegram_bot_token:
         raise HTTPException(status_code=400, detail="TELEGRAM_BOT_TOKEN no configurado en .env")
 
@@ -57,7 +83,7 @@ async def setup_telegram_webhook(
 
 @router.get("/webhooks/telegram/info")
 async def telegram_bot_info() -> dict:
-    """Retorna la información del bot y verifica que el token es válido."""
+    """Verifica que el token es válido y retorna la info del bot."""
     if not settings.telegram_bot_token:
         raise HTTPException(status_code=400, detail="TELEGRAM_BOT_TOKEN no configurado en .env")
     return await _tg.get_me()

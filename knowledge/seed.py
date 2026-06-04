@@ -9,7 +9,7 @@ import logging
 
 from db.migrations import CREATE_TABLES_SQL
 from integrations.postgres import client as db
-from knowledge.loaders import load_cacs, load_equipos, load_ladas, load_objeciones, load_promos
+from knowledge.loaders import load_cacs, load_equipos, load_ladas, load_objeciones, load_paquetes_asl, load_promos
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,7 @@ async def seed() -> None:
 
     await load_ladas.load()
     await load_promos.load()
+    await load_paquetes_asl.load()
     await load_cacs.load()
     await load_equipos.load()
     await load_objeciones.load()
