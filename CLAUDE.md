@@ -17,7 +17,7 @@
 | Caché / Cola | Redis 7 + arq | Contexto de sesión y cola de mensajes |
 | Jobs | APScheduler | Seguimientos automáticos |
 | CRM | Bitrix24 | Pipeline operativo y tipificaciones |
-| Escalamiento | Chatwoot | Handoff al asesor humano |
+| Escalamiento | Bitrix24 Open Lines | Handoff al asesor humano (imconnector) |
 
 ---
 
@@ -36,17 +36,19 @@ bot_telcel_portabilidad/
 │           ├── oferta.py        # Presenta la promo correcta
 │           ├── objeciones.py    # Rebate objeciones (max 3 intentos)
 │           ├── cierre.py        # Captura datos para handoff
-│           └── escalate.py      # Transfiere a Chatwoot con contexto completo
+│           └── escalate.py      # Crea lead en Bitrix y envía handoff al asesor
 │
 ├── integrations/            # Conexiones con servicios externos
-│   ├── exceptions.py        # WhatsAppError, BitrixError, ChatwootError, DatabaseError
+│   ├── exceptions.py        # WhatsAppError, BitrixError, DatabaseError
 │   ├── whatsapp/
 │   │   ├── client.py        # WhatsAppClient.send_message() — httpx + tenacity
 │   │   └── handlers.py      # verify_webhook_signature() — HMAC-SHA256
 │   ├── bitrix/
 │   │   └── client.py        # BitrixClient — crear lead, mover etapa, tipificar
-│   ├── chatwoot/
-│   │   └── client.py        # ChatwootClient — create_conversation, send_message
+│   ├── bitrix/
+│   │   ├── client.py        # BitrixClient — webhook REST (crear lead, mover etapa)
+│   │   ├── oauth.py         # OAuth tokens — exchange, refresh, Redis-backed
+│   │   └── connector.py     # imconnector API — mirror de mensajes en Open Lines
 │   └── postgres/
 │       └── client.py        # Pool asyncpg — execute/fetch/fetchrow parametrizados
 │
@@ -109,7 +111,9 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `WHATSAPP_APP_SECRET` | Usado para validar firma HMAC de webhooks |
 | `WHATSAPP_VERIFY_TOKEN` | Token de verificación del webhook (handshake Meta) |
 | `BITRIX_WEBHOOK_URL` | URL del webhook entrante de Bitrix24 |
-| `CHATWOOT_API_KEY` | Token para la API de Chatwoot |
+| `BITRIX_CLIENT_ID` | Client ID de la app local OAuth de Bitrix24 |
+| `BITRIX_CLIENT_SECRET` | Client Secret de la app local OAuth |
+| `BITRIX_CONNECTOR_LINE_ID` | ID del Open Channel en Bitrix24 |
 | `ANTHROPIC_API_KEY` | API key de Claude (Anthropic) |
 | `DB_PASSWORD` | Contraseña de PostgreSQL |
 | `REDIS_URL` | URL de conexión a Redis |
@@ -160,7 +164,7 @@ WhatsApp (lead Meta Ads)
         ↓
 [cierre] → captura nombre, número a portar, compañía donante, municipio
         ↓
-[escalate] → Chatwoot (asesor humano) + Bitrix: etapa "Listo para Portabilidad"
+[escalate] → Bitrix: lead a "Listo para Portabilidad" + Open Lines asigna a asesor
              El asesor gestiona el NIP en llamada.
 ```
 

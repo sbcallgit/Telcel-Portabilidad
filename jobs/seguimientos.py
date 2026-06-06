@@ -15,6 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from integrations.postgres import client as db
 from integrations.telegram.client import TelegramClient
+from integrations.whatsapp.client import WhatsAppClient
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ _CADENCIAS: dict[str, list[int]] = {
 }
 
 _tg = TelegramClient()
+_wa = WhatsAppClient()
 
 
 def _en_ventana(ahora: datetime) -> bool:
@@ -96,8 +98,8 @@ async def _enviar_seguimiento(lead_id: int, phone: str, etapa: str, numero_seq: 
             logger.error("seguimiento_telegram_error", extra={"lead_id": lead_id, "error": str(exc)})
             raise
     else:
-        # WhatsApp — registrar para envío por worker (implementación Día 3 WhatsApp)
-        logger.info("seguimiento_queued_whatsapp", extra={"lead_id": lead_id, "seq": numero_seq})
+        await _wa.send_message(phone, texto)
+        logger.info("seguimiento_enviado_whatsapp", extra={"lead_id": lead_id, "seq": numero_seq})
 
 
 async def _procesar_lead(row: dict) -> None:

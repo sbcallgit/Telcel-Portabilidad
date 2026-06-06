@@ -5,6 +5,8 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, Response
 
+from api.routes.bitrix import router as bitrix_router
+from api.routes.connector import router as connector_router
 from api.routes.health import router as health_router
 from api.routes.telegram import router as telegram_router
 from api.routes.webhooks import router as webhooks_router
@@ -19,8 +21,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     setup_logging()
     logger.info("app_startup", extra={"version": settings.app_version, "env": settings.environment})
     from integrations.postgres.client import close_pool, create_pool
+    from integrations.redis_client import close_redis, get_redis
+    from jobs.connector_poll import start_connector_poll, stop_connector_poll
     await create_pool()
+    await get_redis()
+    await start_connector_poll()
     yield
+    await stop_connector_poll()
+    await close_redis()
     await close_pool()
     logger.info("app_shutdown")
 
@@ -54,3 +62,5 @@ async def log_requests(request: Request, call_next: object) -> Response:
 app.include_router(health_router)
 app.include_router(webhooks_router)
 app.include_router(telegram_router)
+app.include_router(bitrix_router)
+app.include_router(connector_router)

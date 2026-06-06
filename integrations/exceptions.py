@@ -15,9 +15,5 @@ class BitrixError(IntegrationError):
     """Error al comunicarse con Bitrix24."""
 
 
-class ChatwootError(IntegrationError):
-    """Error al comunicarse con Chatwoot."""
-
-
 class DatabaseError(IntegrationError):
     """Error al comunicarse con PostgreSQL."""

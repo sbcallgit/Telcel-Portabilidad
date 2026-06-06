@@ -10,14 +10,17 @@ class Settings(BaseSettings):
     whatsapp_verify_token: str = ""
     whatsapp_app_secret: str = ""
 
-    # Bitrix24
+    # Bitrix24 — webhook REST (CRM básico)
     bitrix_webhook_url: str = ""
     bitrix_pipeline_id: str = ""
 
-    # Chatwoot
-    chatwoot_api_key: str = ""
-    chatwoot_base_url: str = ""
-    chatwoot_inbox_id: str = ""
+    # Bitrix24 — OAuth + conector personalizado (Open Lines)
+    bitrix_client_id: str = ""
+    bitrix_client_secret: str = ""
+    bitrix_connector_id: str = "whatsapp_vera"
+    bitrix_connector_line_id: str = ""
+    bitrix_stage_listo: str = ""  # ID de etapa "Listo para Portabilidad"
+    bitrix_public_url: str = "https://portabilidad.callcomcc.io"
 
     # PostgreSQL
     db_host: str = "postgres"

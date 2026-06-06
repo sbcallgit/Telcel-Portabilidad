@@ -1,4 +1,4 @@
-"""Nodo de escalamiento: handoff a asesor humano vía Chatwoot + Bitrix24."""
+"""Nodo de escalamiento: handoff a asesor humano vía Bitrix24 Open Lines."""
 
 import logging
 
@@ -26,20 +26,6 @@ def _build_context(state: PortabilidadState) -> dict:
     }
 
 
-async def _try_chatwoot(context: dict, phone: str) -> None:
-    """Crea conversación en Chatwoot con el contexto completo. Silencia errores si no está configurado."""
-    if not settings.chatwoot_api_key or not settings.chatwoot_base_url:
-        logger.info("chatwoot_skipped_not_configured")
-        return
-    try:
-        from integrations.chatwoot.client import ChatwootClient
-        cw = ChatwootClient()
-        await cw.create_conversation(contact_id=phone, context=context)
-        logger.info("chatwoot_conversation_created", extra={"phone_tail": phone[-4:] if len(phone) >= 4 else phone})
-    except Exception as exc:
-        logger.error("chatwoot_error", extra={"error": str(exc)})
-
-
 async def _try_bitrix(context: dict, phone: str) -> str:
     """Crea/actualiza lead en Bitrix24 y devuelve el lead_id. Silencia errores si no configurado."""
     if not settings.bitrix_webhook_url:
@@ -63,7 +49,8 @@ async def _try_bitrix(context: dict, phone: str) -> str:
         )
         lead_id = str(result.get("result", ""))
         if lead_id:
-            await bx.mover_etapa(lead_id, "PROCESSING")  # Listo para Portabilidad
+            stage = settings.bitrix_stage_listo or "PROCESSING"
+            await bx.mover_etapa(lead_id, stage)
         return lead_id
     except Exception as exc:
         logger.error("bitrix_error", extra={"error": str(exc)})
@@ -115,9 +102,8 @@ async def escalate_node(state: PortabilidadState) -> dict:
     phone = state.get("customer_phone") or ""
     motivo = state.get("motivo_escalacion") or "cierre"
 
-    # Integrar con servicios externos (fallos son silenciosos para no bloquear al cliente)
+    # Integrar con Bitrix (fallos son silenciosos para no bloquear al cliente)
     lead_id = await _try_bitrix(context, phone)
-    await _try_chatwoot(context, phone)
 
     handoff_msg = _build_handoff_message(context, motivo)
 

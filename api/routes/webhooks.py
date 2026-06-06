@@ -1,13 +1,27 @@
+"""Webhook de WhatsApp Business (Meta).
+
+GET  /webhooks/telcel  → verificación del webhook (handshake inicial con Meta)
+POST /webhooks/telcel  → mensajes entrantes: valida firma, procesa con el agente,
+                         responde por WhatsApp y espeja en Bitrix Open Lines.
+"""
+
 import logging
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
+from langchain_core.messages import AIMessage, HumanMessage
 
+from agents.portabilidad.graph import agent_graph
 from config.settings import settings
-from integrations.whatsapp.handlers import verify_webhook_signature
+from integrations.bitrix import connector as bitrix_connector
+from integrations.redis_client import get_redis
+from integrations.whatsapp.client import WhatsAppClient
+from integrations.whatsapp.handlers import parse_whatsapp_message, verify_webhook_signature
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+_wa = WhatsAppClient()
 
 
 @router.get("/webhooks/telcel", response_class=PlainTextResponse)
@@ -25,7 +39,7 @@ async def verify_webhook(
 
 @router.post("/webhooks/telcel", status_code=200)
 async def receive_message(request: Request) -> dict:
-    """Recibe mensajes de WhatsApp. Valida firma y encola para procesamiento."""
+    """Recibe mensajes de WhatsApp, los procesa con el agente y responde."""
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
 
@@ -34,6 +48,73 @@ async def receive_message(request: Request) -> dict:
             logger.warning("webhook_signature_invalid")
             raise HTTPException(status_code=401, detail="Invalid signature")
 
-    # TODO Día 3: encolar en Redis con arq para procesamiento por el agente
-    logger.info("webhook_message_received", extra={"bytes": len(body)})
-    return {"status": "queued"}
+    try:
+        import json
+        payload = json.loads(body)
+    except Exception:
+        return {"status": "invalid_json"}
+
+    parsed = parse_whatsapp_message(payload)
+    if parsed is None:
+        return {"status": "ignored"}
+
+    phone, text, message_id = parsed
+
+    # Deduplicación: WhatsApp puede entregar el mismo mensaje dos veces
+    redis = await get_redis()
+    dedup_key = f"wa_processed:{message_id}"
+    if await redis.get(dedup_key):
+        logger.info("webhook_duplicate_message", extra={"message_id": message_id})
+        return {"status": "duplicate"}
+
+    logger.info("webhook_message_received", extra={"phone_tail": phone[-4:], "bytes": len(body)})
+
+    # Espejear mensaje del usuario en Bitrix Open Lines (fire-and-forget)
+    try:
+        await bitrix_connector.send_user_message(phone, text)
+    except Exception as exc:
+        logger.error("connector_user_msg_failed", extra={"error": str(exc)})
+
+    # Marcar como procesado antes de invocar el agente (evita reentrada)
+    await redis.set(dedup_key, "1", ex=60)
+
+    # Correr el agente LangGraph
+    config = {"configurable": {"thread_id": phone}}
+    try:
+        result = await agent_graph.ainvoke(
+            {
+                "messages": [HumanMessage(content=text)],
+                "session_id": phone,
+                "customer_phone": phone,
+            },
+            config=config,
+        )
+    except Exception as exc:
+        logger.error("agent_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+        await _wa.send_message(phone, "Hubo un problema procesando tu mensaje. Por favor intenta de nuevo.")
+        return {"status": "agent_error"}
+
+    # Extraer mensajes nuevos del agente (evitar repetir los ya enviados)
+    all_messages = result.get("messages", [])
+    new_ai_messages = []
+    for msg in reversed(all_messages):
+        if isinstance(msg, HumanMessage):
+            break
+        if isinstance(msg, AIMessage) and msg.content and msg.content != "(procesando objeción)":
+            new_ai_messages.insert(0, msg)
+
+    # Enviar respuestas al usuario y espejear en Bitrix
+    for ai_msg in new_ai_messages:
+        content = str(ai_msg.content)
+        try:
+            await _wa.send_message(phone, content)
+            logger.info("whatsapp_message_sent", extra={"phone_tail": phone[-4:]})
+        except Exception as exc:
+            logger.error("whatsapp_send_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+
+        try:
+            await bitrix_connector.send_bot_message(phone, content)
+        except Exception as exc:
+            logger.error("connector_bot_msg_failed", extra={"error": str(exc)})
+
+    return {"status": "ok"}

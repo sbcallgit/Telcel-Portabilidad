@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.portabilidad.graph import agent_graph
 from config.settings import settings
+from integrations.bitrix import connector as bitrix_connector
 from integrations.telegram.client import TelegramClient
 from integrations.telegram.handlers import parse_update
 
@@ -30,6 +31,12 @@ async def telegram_webhook(request: Request) -> dict:
 
     logger.info("telegram_message_received", extra={"chat_id": msg.chat_id, "text_len": len(msg.text)})
 
+    # Espejear mensaje del usuario en Bitrix Open Lines
+    try:
+        await bitrix_connector.send_user_message(msg.phone, msg.text)
+    except Exception as exc:
+        logger.error("connector_user_msg_failed", extra={"error": str(exc)})
+
     config = {"configurable": {"thread_id": str(msg.chat_id)}}
 
     try:
@@ -52,11 +59,17 @@ async def telegram_webhook(request: Request) -> dict:
                 new_ai.insert(0, m)
 
         for ai_msg in new_ai:
+            content = str(ai_msg.content)
             try:
-                await _tg.send_message(msg.chat_id, ai_msg.content)
+                await _tg.send_message(msg.chat_id, content)
             except Exception as send_exc:
                 logger.error("telegram_send_error", extra={"error": str(send_exc), "chat_id": msg.chat_id})
                 break
+            # Espejear respuesta del bot en Bitrix
+            try:
+                await bitrix_connector.send_bot_message(msg.phone, content)
+            except Exception as exc:
+                logger.error("connector_bot_msg_failed", extra={"error": str(exc)})
 
     except Exception as exc:
         logger.error("agent_error", extra={"error": str(exc), "chat_id": msg.chat_id})
