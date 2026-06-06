@@ -12,7 +12,7 @@ import logging
 import time
 
 import httpx
-from tenacity import retry, reraise, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from config.settings import settings
 from integrations.exceptions import BitrixError
