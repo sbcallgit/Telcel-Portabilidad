@@ -50,15 +50,17 @@ bot_telcel_portabilidad/
 │
 ├── integrations/            # Conexiones con servicios externos
 │   ├── exceptions.py        # WhatsAppError, BitrixError, DatabaseError
+│   ├── debounce.py          # Motor de debounce — agrupa mensajes consecutivos por número
 │   ├── whatsapp/
 │   │   ├── client.py        # WhatsAppClient.send_message() — httpx + tenacity
 │   │   └── handlers.py      # verify_webhook_signature() — HMAC-SHA256
 │   ├── bitrix/
-│   │   └── client.py        # BitrixClient — crear lead, mover etapa, tipificar
-│   ├── bitrix/
 │   │   ├── client.py        # BitrixClient — webhook REST (crear lead, mover etapa)
 │   │   ├── oauth.py         # OAuth tokens — exchange, refresh, Redis-backed
 │   │   └── connector.py     # imconnector API — mirror de mensajes en Open Lines
+│   ├── telegram/
+│   │   ├── client.py        # TelegramClient.send_message()
+│   │   └── handlers.py      # parse_update() — extrae chat_id, text, phone
 │   └── postgres/
 │       └── client.py        # Pool asyncpg — execute/fetch/fetchrow parametrizados
 │
@@ -66,7 +68,8 @@ bot_telcel_portabilidad/
 │   ├── main.py              # App FastAPI — lifespan, middleware de logging
 │   └── routes/
 │       ├── health.py        # GET /health — status ok/degraded + check de DB
-│       └── webhooks.py      # POST/GET /webhooks/telcel — entry point de WhatsApp
+│       ├── webhooks.py      # POST/GET /webhooks/telcel — entry point de WhatsApp
+│       └── telegram.py      # POST /webhooks/telegram — entry point de Telegram (pruebas)
 │
 ├── db/                      # Capa de datos
 │   ├── models.py            # Modelos Pydantic: Lead, Lada, Promo, CAC, Objecion
@@ -127,6 +130,8 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `ANTHROPIC_API_KEY` | API key de Claude (Anthropic) |
 | `DB_PASSWORD` | Contraseña de PostgreSQL |
 | `REDIS_URL` | URL de conexión a Redis |
+| `DEBOUNCE_WINDOW_MS` | Ventana de debounce en ms (0 = desactivado, default 1500) |
+| `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram (canal de pruebas) |
 
 ---
 
@@ -152,14 +157,31 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 
 ---
 
+## Debounce de mensajes
+
+Los webhooks de WhatsApp y Telegram aplican debounce antes de invocar el agente.
+Cuando un usuario manda varios mensajes seguidos, se acumulan en Redis y se procesan
+juntos como un solo turno tras `DEBOUNCE_WINDOW_MS` ms de silencio.
+
+| Clave Redis | Contenido |
+|---|---|
+| `debounce:msgs:{phone\|chat_id}` | Lista de textos acumulados (RPUSH) |
+| `debounce:token:{phone\|chat_id}` | UUID del último mensaje (SET EX 300) |
+
+El webhook retorna `200` a Meta/Telegram de inmediato; el agente corre en un
+`asyncio.Task` en background. Si llega un mensaje más nuevo antes de que expire
+la ventana, el Task anterior detecta que su token ya no es el actual y aborta.
+
+---
+
 ## Flujo del agente (embudo)
 
 ```
-WhatsApp (lead Meta Ads)
+WhatsApp / Telegram (lead Meta Ads)
         │
         ▼
-[webhook] → cola Redis (arq)
-        │
+[webhook] → debounce buffer (Redis)
+        │  espera DEBOUNCE_WINDOW_MS ms sin nuevos mensajes
         ▼
 [validacion] → ¿LADA en R4?
     ├── NO → mensaje + derivar CAC presencial → Bitrix: tipificar "no pertenece a región"
@@ -220,3 +242,5 @@ Los archivos usan placeholders `{NOMBRE}` que `render_prompt()` (`agents/portabi
 - **LADAs:** tabla técnica, no parte del guion. El bot la consulta internamente para decidir si continúa el flujo o deriva a CAC.
 - **Versiones de prompt:** editar los archivos en `prompts/` directamente. Para historial de versiones usar git. La carpeta `knowledge/prompts/` es para specs de auditoría, no para los prompts activos.
 - **Jobs timezone:** siempre `America/Monterrey` explícito. El horario de portabilidad es L-S 9am–9pm; sin domingos.
+- **Debounce:** configurar `DEBOUNCE_WINDOW_MS` en `.env`. Valor actual en producción: `5000` ms. Poner `0` solo en pruebas unitarias o entornos donde cada mensaje debe procesarse de forma independiente.
+- **Telegram:** canal de pruebas que corre el mismo agente y el mismo debounce que WhatsApp. El `thread_id` de LangGraph es `str(chat_id)` en Telegram y `phone` en WhatsApp.
