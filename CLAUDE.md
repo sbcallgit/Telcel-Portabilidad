@@ -25,10 +25,20 @@
 
 ```
 bot_telcel_portabilidad/
+├── prompts/                 # System prompts del agente (archivos .txt editables)
+│   ├── horarios.txt             # Respuestas a preguntas de horario de portación (compartido)
+│   ├── validacion_general.txt   # Primer contacto y mensaje general (validacion)
+│   ├── sondeo_con_recarga.txt   # Presentación de oferta tras capturar monto de recarga
+│   ├── sondeo_sin_recarga.txt   # Sondeo sin monto de recarga conocido
+│   ├── oferta_principal.txt     # Presentación principal de la promo
+│   ├── objeciones.txt           # Rebate de objeciones con banco de respuestas
+│   └── cierre_fallback.txt      # Fallback cuando el cliente no dio un campo KPI claro
+│
 ├── agents/                  # Agente de venta (LangGraph)
 │   └── portabilidad/
 │       ├── state.py         # Estado del agente (PortabilidadState TypedDict)
 │       ├── graph.py         # Grafo LangGraph — conecta todos los nodos
+│       ├── utils.py         # split_msg(), load_prompt(), render_prompt()
 │       └── nodes/
 │           ├── validacion.py    # Valida LADA/región (primer filtro)
 │           ├── sondeo.py        # Conoce al cliente: recarga, uso, necesidad
@@ -186,9 +196,27 @@ Basado en 2 rondas de auditoría y mystery shopper (40 hallazgos, 13 patrones si
 
 ---
 
+## Sistema de prompts
+
+Los system prompts del agente viven en `prompts/*.txt` — **no** en el código Python. Para editar el comportamiento de Vera, editar el `.txt` correspondiente y reiniciar el contenedor; no se requiere cambiar código.
+
+| Archivo | Cuándo se usa |
+|---|---|
+| `horarios.txt` | Pregunta sobre horarios de portación (validacion, sondeo, oferta) |
+| `validacion_general.txt` | Primer contacto y mensajes generales antes de tener el número |
+| `sondeo_con_recarga.txt` | Presentación de oferta tras capturar el monto de recarga |
+| `sondeo_sin_recarga.txt` | Sondeo cuando aún no se tiene el monto de recarga |
+| `oferta_principal.txt` | Re-presentación o ajuste de la promo en el nodo de oferta |
+| `objeciones.txt` | Rebate de objeciones usando el banco de respuestas de la BD |
+| `cierre_fallback.txt` | Fallback cuando el cliente no dio un campo KPI claramente |
+
+Los archivos usan placeholders `{NOMBRE}` que `render_prompt()` (`agents/portabilidad/utils.py`) sustituye en tiempo de ejecución con las constantes de `context.py` y variables dinámicas (monto de recarga, promos, etc.).
+
+---
+
 ## Notas de desarrollo
 
 - **Promos:** configuración versionada en tabla `promos`. Cuando Telcel publique nuevas, actualizar `load_promos.py` y correr `make seed`. NUNCA hardcodear precios en el agente.
 - **LADAs:** tabla técnica, no parte del guion. El bot la consulta internamente para decidir si continúa el flujo o deriva a CAC.
-- **Versiones de prompt:** guardar en `knowledge/prompts/` con tag de versión y hallazgos de auditoría que resuelve cada una.
+- **Versiones de prompt:** editar los archivos en `prompts/` directamente. Para historial de versiones usar git. La carpeta `knowledge/prompts/` es para specs de auditoría, no para los prompts activos.
 - **Jobs timezone:** siempre `America/Monterrey` explícito. El horario de portabilidad es L-S 9am–9pm; sin domingos.
