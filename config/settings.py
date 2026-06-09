@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = "tg_webhook_secret_dev"
 
+    # Debounce de mensajes WhatsApp (ms; 0 = desactivado)
+    debounce_window_ms: int = 1500
+
     # App
     app_version: str = "1.0.0"
     environment: str = "development"

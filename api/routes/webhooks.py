@@ -1,8 +1,15 @@
 """Webhook de WhatsApp Business (Meta).
 
 GET  /webhooks/telcel  → verificación del webhook (handshake inicial con Meta)
-POST /webhooks/telcel  → mensajes entrantes: valida firma, procesa con el agente,
-                         responde por WhatsApp y espeja en Bitrix Open Lines.
+POST /webhooks/telcel  → mensajes entrantes: valida firma, acumula con debounce,
+                         procesa con el agente, responde por WhatsApp y espeja
+                         en Bitrix Open Lines.
+
+Flujo de debounce:
+  1. El webhook valida firma, deduplica y espeja el mensaje del usuario en Bitrix.
+  2. Encola el texto en el buffer de debounce (Redis) y retorna 200 de inmediato.
+  3. Tras DEBOUNCE_WINDOW_MS ms sin nuevos mensajes del mismo número, un
+     asyncio.Task drena el buffer, combina los textos y corre el agente.
 """
 
 import logging
@@ -13,6 +20,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.portabilidad.graph import agent_graph
 from config.settings import settings
+from integrations import debounce
 from integrations.bitrix import connector as bitrix_connector
 from integrations.redis_client import get_redis
 from integrations.whatsapp.client import WhatsAppClient
@@ -22,6 +30,46 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _wa = WhatsAppClient()
+
+
+async def _process_message(phone: str, text: str) -> None:
+    """Callback que recibe el texto ya agrupado y corre el agente."""
+    config = {"configurable": {"thread_id": phone}}
+    try:
+        result = await agent_graph.ainvoke(
+            {
+                "messages": [HumanMessage(content=text)],
+                "session_id": phone,
+                "customer_phone": phone,
+            },
+            config=config,
+        )
+    except Exception as exc:
+        logger.error("agent_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+        await _wa.send_message(phone, "Hubo un problema procesando tu mensaje. Por favor intenta de nuevo.")
+        return
+
+    # Extraer mensajes nuevos del agente (evitar repetir los ya enviados)
+    all_messages = result.get("messages", [])
+    new_ai_messages = []
+    for msg in reversed(all_messages):
+        if isinstance(msg, HumanMessage):
+            break
+        if isinstance(msg, AIMessage) and msg.content and msg.content != "(procesando objeción)":
+            new_ai_messages.insert(0, msg)
+
+    for ai_msg in new_ai_messages:
+        content = str(ai_msg.content)
+        try:
+            await _wa.send_message(phone, content)
+            logger.info("whatsapp_message_sent", extra={"phone_tail": phone[-4:]})
+        except Exception as exc:
+            logger.error("whatsapp_send_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+
+        try:
+            await bitrix_connector.send_bot_message(phone, content)
+        except Exception as exc:
+            logger.error("connector_bot_msg_failed", extra={"error": str(exc)})
 
 
 @router.get("/webhooks/telcel", response_class=PlainTextResponse)
@@ -39,7 +87,7 @@ async def verify_webhook(
 
 @router.post("/webhooks/telcel", status_code=200)
 async def receive_message(request: Request) -> dict:
-    """Recibe mensajes de WhatsApp, los procesa con el agente y responde."""
+    """Recibe mensajes de WhatsApp, los acumula con debounce y responde."""
     body = await request.body()
     signature = request.headers.get("X-Hub-Signature-256", "")
 
@@ -66,55 +114,17 @@ async def receive_message(request: Request) -> dict:
     if await redis.get(dedup_key):
         logger.info("webhook_duplicate_message", extra={"message_id": message_id})
         return {"status": "duplicate"}
+    await redis.set(dedup_key, "1", ex=60)
 
     logger.info("webhook_message_received", extra={"phone_tail": phone[-4:], "bytes": len(body)})
 
-    # Espejear mensaje del usuario en Bitrix Open Lines (fire-and-forget)
+    # Espejear mensaje del usuario en Bitrix Open Lines (por mensaje, no por turno)
     try:
         await bitrix_connector.send_user_message(phone, text)
     except Exception as exc:
         logger.error("connector_user_msg_failed", extra={"error": str(exc)})
 
-    # Marcar como procesado antes de invocar el agente (evita reentrada)
-    await redis.set(dedup_key, "1", ex=60)
-
-    # Correr el agente LangGraph
-    config = {"configurable": {"thread_id": phone}}
-    try:
-        result = await agent_graph.ainvoke(
-            {
-                "messages": [HumanMessage(content=text)],
-                "session_id": phone,
-                "customer_phone": phone,
-            },
-            config=config,
-        )
-    except Exception as exc:
-        logger.error("agent_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
-        await _wa.send_message(phone, "Hubo un problema procesando tu mensaje. Por favor intenta de nuevo.")
-        return {"status": "agent_error"}
-
-    # Extraer mensajes nuevos del agente (evitar repetir los ya enviados)
-    all_messages = result.get("messages", [])
-    new_ai_messages = []
-    for msg in reversed(all_messages):
-        if isinstance(msg, HumanMessage):
-            break
-        if isinstance(msg, AIMessage) and msg.content and msg.content != "(procesando objeción)":
-            new_ai_messages.insert(0, msg)
-
-    # Enviar respuestas al usuario y espejear en Bitrix
-    for ai_msg in new_ai_messages:
-        content = str(ai_msg.content)
-        try:
-            await _wa.send_message(phone, content)
-            logger.info("whatsapp_message_sent", extra={"phone_tail": phone[-4:]})
-        except Exception as exc:
-            logger.error("whatsapp_send_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
-
-        try:
-            await bitrix_connector.send_bot_message(phone, content)
-        except Exception as exc:
-            logger.error("connector_bot_msg_failed", extra={"error": str(exc)})
+    # Encolar con debounce — retorna inmediatamente; el agente corre en background
+    await debounce.enqueue(phone, text, settings.debounce_window_ms, _process_message)
 
     return {"status": "ok"}
