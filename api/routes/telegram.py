@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.portabilidad.graph import agent_graph
 from config.settings import settings
+from integrations import debounce
 from integrations.bitrix import connector as bitrix_connector
 from integrations.telegram.client import TelegramClient
 from integrations.telegram.handlers import parse_update
@@ -15,9 +16,50 @@ logger = logging.getLogger(__name__)
 _tg = TelegramClient()
 
 
+async def _process_telegram_message(thread_id: str, text: str, chat_id: int, phone: str) -> None:
+    """Callback que recibe el texto ya agrupado y corre el agente."""
+    config = {"configurable": {"thread_id": thread_id}}
+    try:
+        result = await agent_graph.ainvoke(
+            {
+                "messages": [HumanMessage(content=text)],
+                "session_id": thread_id,
+                "customer_phone": phone,
+            },
+            config=config,
+        )
+    except Exception as exc:
+        logger.error("agent_error", extra={"error": str(exc), "chat_id": chat_id})
+        try:
+            await _tg.send_message(chat_id, "Hubo un problema técnico. Intenta de nuevo en un momento.")
+        except Exception:
+            pass
+        return
+
+    all_messages = result.get("messages", [])
+    new_ai: list[AIMessage] = []
+    for m in reversed(all_messages):
+        if isinstance(m, HumanMessage):
+            break
+        if isinstance(m, AIMessage) and m.content and m.content != "(procesando objeción)":
+            new_ai.insert(0, m)
+
+    for ai_msg in new_ai:
+        content = str(ai_msg.content)
+        try:
+            await _tg.send_message(chat_id, content)
+        except Exception as send_exc:
+            logger.error("telegram_send_error", extra={"error": str(send_exc), "chat_id": chat_id})
+            break
+        try:
+            await bitrix_connector.send_bot_message(phone, content)
+        except Exception as exc:
+            logger.error("connector_bot_msg_failed", extra={"error": str(exc)})
+
+
 @router.post("/webhooks/telegram", status_code=200)
 async def telegram_webhook(request: Request) -> dict:
-    """Recibe updates de Telegram, valida el secret y procesa con el agente."""
+    """Recibe updates de Telegram, valida el secret y procesa con debounce."""
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
     if secret != settings.telegram_webhook_secret:
         logger.warning("telegram_webhook_invalid_secret")
@@ -31,52 +73,21 @@ async def telegram_webhook(request: Request) -> dict:
 
     logger.info("telegram_message_received", extra={"chat_id": msg.chat_id, "text_len": len(msg.text)})
 
-    # Espejear mensaje del usuario en Bitrix Open Lines
+    # Espejear mensaje del usuario en Bitrix Open Lines (por mensaje, antes del debounce)
     try:
         await bitrix_connector.send_user_message(msg.phone, msg.text)
     except Exception as exc:
         logger.error("connector_user_msg_failed", extra={"error": str(exc)})
 
-    config = {"configurable": {"thread_id": str(msg.chat_id)}}
+    # thread_id para Telegram usa el chat_id (equivalente al phone en WhatsApp)
+    thread_id = str(msg.chat_id)
+    chat_id = msg.chat_id
+    phone = msg.phone
 
-    try:
-        result = await agent_graph.ainvoke(
-            {
-                "messages": [HumanMessage(content=msg.text)],
-                "session_id": str(msg.chat_id),
-                "customer_phone": msg.phone,
-            },
-            config=config,
-        )
+    async def _callback(tid: str, text: str) -> None:
+        await _process_telegram_message(tid, text, chat_id, phone)
 
-        # Enviar solo las burbujas nuevas (AIMessages después del último HumanMessage)
-        all_messages = result.get("messages", [])
-        new_ai: list[AIMessage] = []
-        for m in reversed(all_messages):
-            if isinstance(m, HumanMessage):
-                break
-            if isinstance(m, AIMessage) and m.content and m.content != "(procesando objeción)":
-                new_ai.insert(0, m)
-
-        for ai_msg in new_ai:
-            content = str(ai_msg.content)
-            try:
-                await _tg.send_message(msg.chat_id, content)
-            except Exception as send_exc:
-                logger.error("telegram_send_error", extra={"error": str(send_exc), "chat_id": msg.chat_id})
-                break
-            # Espejear respuesta del bot en Bitrix
-            try:
-                await bitrix_connector.send_bot_message(msg.phone, content)
-            except Exception as exc:
-                logger.error("connector_bot_msg_failed", extra={"error": str(exc)})
-
-    except Exception as exc:
-        logger.error("agent_error", extra={"error": str(exc), "chat_id": msg.chat_id})
-        try:
-            await _tg.send_message(msg.chat_id, "Hubo un problema técnico. Intenta de nuevo en un momento.")
-        except Exception:
-            pass  # No podemos enviar el error si el canal está caído
+    await debounce.enqueue(thread_id, msg.text, settings.debounce_window_ms, _callback)
 
     return {"status": "ok"}
 
