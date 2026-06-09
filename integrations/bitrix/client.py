@@ -32,37 +32,43 @@ class BitrixClient:
         except httpx.RequestError as exc:
             raise BitrixError("Bitrix network error", retriable=True, original=exc) from exc
 
-    async def crear_o_actualizar_lead(self, telefono: str, datos: dict) -> dict:
-        """Crea o actualiza el lead en Bitrix con los datos del cliente."""
+    async def crear_deal(self, telefono: str, datos: dict) -> dict:
+        """Crea un deal en el pipeline de portabilidad (category_id = BITRIX_PIPELINE_ID)."""
+        nombre = datos.get("NAME", "")
+        titulo = f"Portabilidad {nombre} - *{telefono[-4:]}" if nombre else f"Portabilidad *{telefono[-4:]}"
         fields = {
-            "PHONE": [{"VALUE": telefono, "VALUE_TYPE": "WORK"}],
-            "TITLE": f"Portabilidad {telefono[-4:]}",
-            **datos,
+            "TITLE": titulo,
+            "CATEGORY_ID": settings.bitrix_pipeline_id,
+            "STAGE_ID": settings.bitrix_stage_listo,
+            "COMMENTS": (
+                f"Teléfono: {telefono}\n"
+                + datos.get("COMMENTS", "")
+            ),
         }
-        result = await self._call("crm.lead.add", {"fields": fields})
-        logger.info("bitrix_lead_created", extra={"phone_tail": telefono[-4:]})
+        result = await self._call("crm.deal.add", {"fields": fields})
+        logger.info("bitrix_deal_created", extra={"phone_tail": telefono[-4:]})
         return result
 
-    async def mover_etapa(self, lead_id: str, etapa: str) -> dict:
-        """Mueve el lead a la etapa indicada del pipeline operativo."""
-        result = await self._call("crm.lead.update", {"id": lead_id, "fields": {"STATUS_ID": etapa}})
-        logger.info("bitrix_etapa_actualizada", extra={"lead_id": lead_id, "etapa": etapa})
+    async def mover_etapa(self, deal_id: str, etapa: str) -> dict:
+        """Mueve el deal a la etapa indicada del pipeline."""
+        result = await self._call("crm.deal.update", {"id": deal_id, "fields": {"STAGE_ID": etapa}})
+        logger.info("bitrix_etapa_actualizada", extra={"deal_id": deal_id, "etapa": etapa})
         return result
 
-    async def set_tipificacion(self, lead_id: str, tipificacion: str) -> dict:
-        """Registra el motivo de cierre/caída en el lead."""
+    async def set_tipificacion(self, deal_id: str, tipificacion: str) -> dict:
+        """Registra el motivo de cierre/caída en el deal."""
         result = await self._call(
-            "crm.lead.update",
-            {"id": lead_id, "fields": {"UF_TIPIFICACION": tipificacion}},
+            "crm.deal.update",
+            {"id": deal_id, "fields": {"UF_TIPIFICACION": tipificacion}},
         )
-        logger.info("bitrix_tipificacion_set", extra={"lead_id": lead_id, "tipo": tipificacion})
+        logger.info("bitrix_tipificacion_set", extra={"deal_id": deal_id, "tipo": tipificacion})
         return result
 
-    async def marcar_venta_exitosa(self, lead_id: str) -> dict:
-        """Marca la casilla de venta exitosa y mueve a la etapa Venta."""
+    async def marcar_venta_exitosa(self, deal_id: str) -> dict:
+        """Mueve el deal a la etapa VENTA (C90:WON)."""
         result = await self._call(
-            "crm.lead.update",
-            {"id": lead_id, "fields": {"STATUS_ID": "CONVERTED", "UF_VENTA_EXITOSA": True}},
+            "crm.deal.update",
+            {"id": deal_id, "fields": {"STAGE_ID": "C90:WON"}},
         )
-        logger.info("bitrix_venta_exitosa", extra={"lead_id": lead_id})
+        logger.info("bitrix_venta_exitosa", extra={"deal_id": deal_id})
         return result

@@ -34,7 +34,7 @@ async def _try_bitrix(context: dict, phone: str) -> str:
     try:
         from integrations.bitrix.client import BitrixClient
         bx = BitrixClient()
-        result = await bx.crear_o_actualizar_lead(
+        result = await bx.crear_deal(
             telefono=phone,
             datos={
                 "NAME": context.get("nombre", ""),
@@ -47,11 +47,7 @@ async def _try_bitrix(context: dict, phone: str) -> str:
                 ),
             },
         )
-        lead_id = str(result.get("result", ""))
-        if lead_id:
-            stage = settings.bitrix_stage_listo or "PROCESSING"
-            await bx.mover_etapa(lead_id, stage)
-        return lead_id
+        return str(result.get("result", ""))
     except Exception as exc:
         logger.error("bitrix_error", extra={"error": str(exc)})
         return ""
@@ -103,7 +99,7 @@ async def escalate_node(state: PortabilidadState) -> dict:
     motivo = state.get("motivo_escalacion") or "cierre"
 
     # Integrar con Bitrix (fallos son silenciosos para no bloquear al cliente)
-    lead_id = await _try_bitrix(context, phone)
+    deal_id = await _try_bitrix(context, phone)
 
     handoff_msg = _build_handoff_message(context, motivo)
 
@@ -112,13 +108,13 @@ async def escalate_node(state: PortabilidadState) -> dict:
         extra={
             "phone_tail": phone[-4:] if len(phone) >= 4 else phone,
             "motivo": motivo,
-            "lead_id": lead_id,
+            "deal_id": deal_id,
         },
     )
 
     return {
         "messages": [AIMessage(content=handoff_msg)],
-        "bitrix_lead_id": lead_id,
+        "bitrix_lead_id": deal_id,
         "bitrix_etapa": "listo_para_portabilidad",
         "etapa": "fin",
         "escalate_to_human": False,
