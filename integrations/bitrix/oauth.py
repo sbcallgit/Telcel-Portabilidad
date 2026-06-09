@@ -43,7 +43,7 @@ async def save_tokens(data: dict) -> None:
         "access_token": data["access_token"],
         "refresh_token": data["refresh_token"],
         "expires_at": int(time.time()) + int(data.get("expires_in", 3600)),
-        "domain": data.get("client_endpoint", _BITRIX_DOMAIN).rstrip("/rest/"),
+        "domain": data.get("client_endpoint", _BITRIX_DOMAIN).removesuffix("/rest/"),
     }
     await redis.set(_REDIS_KEY, json.dumps(payload))
     logger.info("bitrix_oauth_tokens_saved")
