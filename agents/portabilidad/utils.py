@@ -1,6 +1,21 @@
 """Utilidades compartidas de los nodos del agente de portabilidad."""
 
+from pathlib import Path
+
 from langchain_core.messages import AIMessage
+
+_PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+
+
+def load_prompt(name: str) -> str:
+    return (_PROMPTS_DIR / f"{name}.txt").read_text(encoding="utf-8").strip()
+
+
+def render_prompt(name: str, **kwargs) -> str:
+    text = load_prompt(name)
+    for key, value in kwargs.items():
+        text = text.replace(f"{{{key}}}", str(value))
+    return text
 
 MAX_BUBBLE_CHARS = 160
 

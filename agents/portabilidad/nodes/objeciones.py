@@ -5,7 +5,7 @@ import logging
 from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
-from agents.portabilidad.utils import split_msg
+from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import FORMAT_RULES, HARD_RULES, OBJECTIONS_BANK
 from agents.portabilidad.state import PortabilidadState
 from integrations.postgres import client as db
@@ -145,19 +145,13 @@ async def objeciones_node(state: PortabilidadState) -> dict:
         beneficios = datos.get("beneficios", "los beneficios de la promo")
         base_response = base_response.replace("{vigencia}", str(vigencia)).replace("{beneficios}", beneficios)
 
-    system = (
-        "Eres Vera, asistente de Telcel para portabilidad. El cliente tiene una objeción.\n\n"
-        f"Promo en discusión: {promo or 'portabilidad Telcel'}\n"
-        f"Respuesta sugerida del banco de objeciones: {base_response or '(no disponible)'}\n\n"
-        f"{OBJECTIONS_BANK}\n"
-        f"{HARD_RULES}\n"
-        f"{FORMAT_RULES}\n"
-        "Construye una respuesta empática y convincente:\n"
-        "- Reconoce la objeción\n"
-        "- Usa la respuesta del OBJECTIONS_BANK más parecida a la objeción actual, adaptándola de forma natural\n"
-        "- Si el cliente dice 'está caro' → mostrar que con la misma recarga tiene el triple de beneficios\n"
-        "- Cierra con una pregunta que invite a seguir\n"
-        "Tono cálido, sin presión excesiva."
+    system = render_prompt(
+        "objeciones",
+        promo=promo or "portabilidad Telcel",
+        base_response=base_response or "(no disponible)",
+        OBJECTIONS_BANK=OBJECTIONS_BANK,
+        HARD_RULES=HARD_RULES,
+        FORMAT_RULES=FORMAT_RULES,
     )
 
     ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-6:]))

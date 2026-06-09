@@ -15,7 +15,7 @@ import re
 from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
-from agents.portabilidad.utils import split_msg
+from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.state import PortabilidadState
 
 logger = logging.getLogger(__name__)
@@ -160,9 +160,6 @@ async def cierre_node(state: PortabilidadState) -> dict:
         "compania_donante": "compañía actual del cliente (Movistar, AT&T, Nextel, etc.)",
     }.get(pending or "", "información")
 
-    system = (
-        f"Eres Vera, asistente de Telcel para portabilidad. Necesitas obtener el {campo_desc}.\n"
-        "El cliente no lo dio claramente. Pídelo de nuevo con amabilidad, máximo 2 líneas."
-    )
+    system = render_prompt("cierre_fallback", campo_desc=campo_desc)
     ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-4:]))
     return {"messages": split_msg(ai_msg.content), "datos_lead": datos}

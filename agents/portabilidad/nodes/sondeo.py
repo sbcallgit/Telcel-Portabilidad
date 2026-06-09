@@ -11,7 +11,7 @@ import re
 from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
-from agents.portabilidad.utils import split_msg
+from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
     AMAZON_PRIME_BY_PACKAGE,
     ASL_CATALOG,
@@ -189,13 +189,7 @@ async def sondeo_node(state: PortabilidadState) -> dict:
     # Preguntas sobre horarios de portabilidad
     if any(w in lower for w in _HORARIO_Q):
         llm = get_llm()
-        system = (
-            "Eres Vera, asistente de Telcel para portabilidad.\n"
-            f"{PORTABILITY_SCHEDULE}\n"
-            f"{FORMAT_RULES}\n"
-            "Responde la pregunta sobre horarios usando SOLO los datos anteriores. "
-            "Si pregunta cuándo queda lista, menciona la hora exacta (2:00 a.m.) y el día hábil correspondiente."
-        )
+        system = render_prompt("horarios", PORTABILITY_SCHEDULE=PORTABILITY_SCHEDULE, FORMAT_RULES=FORMAT_RULES)
         ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-4:]))
         return {"messages": split_msg(ai_msg.content), "datos_lead": datos}
 
@@ -258,21 +252,15 @@ async def sondeo_node(state: PortabilidadState) -> dict:
             promos_text = "\n\n".join(_format_promo_completa(p) for p in promos)
 
             llm = get_llm()
-            system = (
-                "Eres Vera, asistente de Telcel para portabilidad — campaña Muévete Prepago Región 4.\n"
-                f"El cliente recarga ${recarga} normalmente.\n\n"
-                "PROMO DISPONIBLE PARA ESTE PERFIL (usa SOLO estos datos, nunca inventes):\n"
-                f"{promos_text}\n\n"
-                f"{ASL_CATALOG}\n"
-                f"{AMAZON_PRIME_BY_PACKAGE}\n"
-                f"{OFFER_TEMPLATE}\n"
-                f"{HARD_RULES}\n"
-                f"{FORMAT_RULES}\n"
-                "TAREA: Presenta la oferta brevemente con la plantilla OFFER_TEMPLATE.\n"
-                "Solo menciona los 3 beneficios más relevantes para este cliente. "
-                "NO menciones canales de recarga, ni comparaciones con otras compañías, ni información que el cliente no haya pedido.\n"
-                "Cierra con: '¿Quieres que apartemos tu beneficio? 🎉'\n"
-                "NUNCA inventar GB, precios, vigencias ni beneficios."
+            system = render_prompt(
+                "sondeo_con_recarga",
+                recarga=recarga,
+                promos_text=promos_text,
+                ASL_CATALOG=ASL_CATALOG,
+                AMAZON_PRIME_BY_PACKAGE=AMAZON_PRIME_BY_PACKAGE,
+                OFFER_TEMPLATE=OFFER_TEMPLATE,
+                HARD_RULES=HARD_RULES,
+                FORMAT_RULES=FORMAT_RULES,
             )
             ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-4:]))
 
@@ -298,24 +286,16 @@ async def sondeo_node(state: PortabilidadState) -> dict:
     llm = get_llm()
     recarga_c = datos.get("recarga_habitual", "desconocida")
 
-    system = (
-        "Eres Vera, asistente de Telcel para portabilidad. El cliente ya fue validado en la región.\n\n"
-        f"Estado del sondeo:\n"
-        f"- Monto de recarga habitual: {recarga_c}\n\n"
-        f"{ASL_CATALOG}\n"
-        f"{AMAZON_PRIME_BY_PACKAGE}\n"
-        f"{PORTABILITY_SCHEDULE}\n"
-        f"{CLARO_DRIVE_MUSICA}\n"
-        f"{ID_DOCS_INFO}\n"
-        f"{HARD_RULES}\n"
-        f"{FORMAT_RULES}\n"
-        "TAREA:\n"
-        "- Si no tienes el monto de recarga: pregunta SOLO '¿Cuánto recargas normalmente?' — nada más.\n"
-        "- SIEMPRE responde la pregunta del cliente PRIMERO, luego haz tu pregunta.\n"
-        "- Si el cliente pregunta qué planes hay, di: 'Dime cuánto recargas y te muestro qué beneficios "
-        "tendrías 🙌' — no listes todos los paquetes.\n"
-        "- NO menciones canales de recarga, comparaciones con otras compañías ni datos que el cliente no pidió.\n"
-        "- Responde preguntas específicas del catálogo con el dato puntual solicitado."
+    system = render_prompt(
+        "sondeo_sin_recarga",
+        recarga_c=recarga_c,
+        ASL_CATALOG=ASL_CATALOG,
+        AMAZON_PRIME_BY_PACKAGE=AMAZON_PRIME_BY_PACKAGE,
+        PORTABILITY_SCHEDULE=PORTABILITY_SCHEDULE,
+        CLARO_DRIVE_MUSICA=CLARO_DRIVE_MUSICA,
+        ID_DOCS_INFO=ID_DOCS_INFO,
+        HARD_RULES=HARD_RULES,
+        FORMAT_RULES=FORMAT_RULES,
     )
 
     ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-6:]))

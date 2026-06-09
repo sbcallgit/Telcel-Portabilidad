@@ -5,7 +5,7 @@ import logging
 from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
-from agents.portabilidad.utils import split_msg
+from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
     AMAZON_PRIME_BY_PACKAGE,
     ASL_CATALOG,
@@ -201,13 +201,7 @@ async def oferta_node(state: PortabilidadState) -> dict:
     # Pregunta sobre horarios de portabilidad
     if any(w in lower for w in _HORARIO_Q):
         llm = get_llm()
-        system = (
-            "Eres Vera, asistente de Telcel para portabilidad.\n"
-            f"{PORTABILITY_SCHEDULE}\n"
-            f"{FORMAT_RULES}\n"
-            "Responde la pregunta del cliente sobre horarios de portabilidad usando SOLO los datos anteriores. "
-            "Si pregunta cuándo queda lista, di la hora exacta (2:00 a.m.) y el día hábil."
-        )
+        system = render_prompt("horarios", PORTABILITY_SCHEDULE=PORTABILITY_SCHEDULE, FORMAT_RULES=FORMAT_RULES)
         ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-4:]))
         return {"messages": split_msg(ai_msg.content)}
 
@@ -320,24 +314,16 @@ async def oferta_node(state: PortabilidadState) -> dict:
     promos_text = "\n\n".join(_format_promo(p) for p in promos)
     uso_str = datos.get("uso_predominante", "")
 
-    system = (
-        "Eres Vera, asistente de Telcel para portabilidad.\n"
-        f"El cliente recarga ${recarga_num} normalmente.\n\n"
-        "PROMO DISPONIBLE PARA ESTE PERFIL (usa SOLO estos datos, nunca inventes):\n"
-        f"{promos_text}\n\n"
-        f"{OFFER_TEMPLATE}\n"
-        f"{AMAZON_PRIME_BY_PACKAGE}\n"
-        f"{CLARO_DRIVE_MUSICA}\n"
-        f"{ID_DOCS_INFO}\n"
-        f"{HARD_RULES}\n"
-        f"{FORMAT_RULES}\n"
-        "CÓMO PRESENTAR LA PROMO:\n"
-        "- SIEMPRE responde la pregunta del cliente PRIMERO si la hay.\n"
-        "- Recomienda UNA promo con máximo 3 beneficios clave — los más relevantes para este cliente.\n"
-        "- NO menciones canales de recarga, comparaciones con otras compañías ni variantes extra "
-        "a menos que el cliente lo pida explícitamente.\n"
-        "- Cierra con: '¿Quieres que apartemos tu beneficio? 🎉'\n"
-        "- NUNCA listes todos los paquetes. NUNCA inventes datos."
+    system = render_prompt(
+        "oferta_principal",
+        recarga_num=recarga_num,
+        promos_text=promos_text,
+        OFFER_TEMPLATE=OFFER_TEMPLATE,
+        AMAZON_PRIME_BY_PACKAGE=AMAZON_PRIME_BY_PACKAGE,
+        CLARO_DRIVE_MUSICA=CLARO_DRIVE_MUSICA,
+        ID_DOCS_INFO=ID_DOCS_INFO,
+        HARD_RULES=HARD_RULES,
+        FORMAT_RULES=FORMAT_RULES,
     )
 
     ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-6:]))

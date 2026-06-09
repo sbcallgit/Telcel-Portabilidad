@@ -6,7 +6,7 @@ import re
 from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
-from agents.portabilidad.utils import split_msg
+from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
     ASL_CATALOG,
     CHANNEL_RULES,
@@ -216,13 +216,7 @@ async def validacion_node(state: PortabilidadState) -> dict:
     # Pregunta sobre horarios de portabilidad
     if any(w in lower for w in _HORARIO_Q):
         llm = get_llm()
-        system = (
-            "Eres Vera, asistente de Telcel para portabilidad.\n"
-            f"{PORTABILITY_SCHEDULE}\n"
-            f"{FORMAT_RULES}\n"
-            "Responde la pregunta sobre horarios usando SOLO los datos anteriores. "
-            "Menciona la hora exacta (2:00 a.m.) y el día hábil."
-        )
+        system = render_prompt("horarios", PORTABILITY_SCHEDULE=PORTABILITY_SCHEDULE, FORMAT_RULES=FORMAT_RULES)
         ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-4:]))
         return {"messages": split_msg(ai_msg.content)}
 
@@ -435,30 +429,24 @@ async def validacion_node(state: PortabilidadState) -> dict:
     llm = get_llm()
     is_first = len(messages) == 1
 
-    system = (
-        "Eres Vera, asistente de Telcel para portabilidad — campaña Muévete Prepago Región 4.\n\n"
-        "⚠️ PASO OBLIGATORIO: Antes de hablar de planes, precios o promos, NECESITAS el número "
-        "de teléfono de 10 dígitos del cliente para validar que pertenece a Región 4. "
-        "Sin el número, NO puedes ofrecer ninguna promo ni avanzar el proceso.\n\n"
-        f"{SALES_APPROACH}\n"
-        f"{ASL_CATALOG}\n"
-        f"{CHANNEL_RULES}\n"
-        f"{PORTABILITY_SCHEDULE}\n"
-        f"{CLARO_DRIVE_MUSICA}\n"
-        f"{ID_DOCS_INFO}\n"
-        f"{HARD_RULES}\n"
-        f"{FORMAT_RULES}\n"
-        f"{GREETING_VARIANTS}\n"
-        "REGLAS DE CONVERSACIÓN:\n"
-        "- Si el cliente pregunta sobre planes, precios o promos: responde brevemente (1 línea) "
-        "y luego pide el número.\n"
-        "- Para preguntas ESPECÍFICAS (dato puntual de un paquete): da el dato y pide el número.\n"
-        "- NUNCA inventar precios ni vigencias.\n"
-        "- Una sola pregunta al final.\n"
-        + ("Primer mensaje: usa el saludo estándar de GREETING_VARIANTS — incluye el hook "
-           "'triple de beneficios en tus recargas por 12 meses' y pide el número de 10 dígitos."
-           if is_first else
-           "Responde al cliente y asegúrate de pedir su número de 10 dígitos al final si aún no lo tienes.")
+    instruction_saludo = (
+        "Primer mensaje: usa el saludo estándar de GREETING_VARIANTS — incluye el hook "
+        "'triple de beneficios en tus recargas por 12 meses' y pide el número de 10 dígitos."
+        if is_first else
+        "Responde al cliente y asegúrate de pedir su número de 10 dígitos al final si aún no lo tienes."
+    )
+    system = render_prompt(
+        "validacion_general",
+        SALES_APPROACH=SALES_APPROACH,
+        ASL_CATALOG=ASL_CATALOG,
+        CHANNEL_RULES=CHANNEL_RULES,
+        PORTABILITY_SCHEDULE=PORTABILITY_SCHEDULE,
+        CLARO_DRIVE_MUSICA=CLARO_DRIVE_MUSICA,
+        ID_DOCS_INFO=ID_DOCS_INFO,
+        HARD_RULES=HARD_RULES,
+        FORMAT_RULES=FORMAT_RULES,
+        GREETING_VARIANTS=GREETING_VARIANTS,
+        instruction_saludo=instruction_saludo,
     )
 
     ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages))
