@@ -181,36 +181,23 @@ async def send_user_message(phone: str, text: str) -> str | None:
 
 
 async def send_bot_message(phone: str, text: str) -> None:
-    """Espeja la respuesta de Vera en el chat de Open Lines.
+    """Espeja la respuesta de Vera en el chat de Open Lines como mensaje SALIENTE.
 
-    Usa el mismo external_chat_id del usuario para mantener la sesión.
-    El prefijo 🤖 distingue visualmente las respuestas automáticas.
+    Usa im.message.add (no imconnector) para que aparezca en el lado del operador,
+    no en el del usuario externo. El prefijo 🤖 distingue las respuestas automáticas.
     """
     if not settings.bitrix_client_id or not settings.bitrix_connector_line_id:
         return
 
-    external_chat_id = await _get_or_create_external_chat_id(phone)
-    ts = int(time.time())
+    redis = await get_redis()
+    chat_id = await redis.get(f"connector_chat:{phone}")
+    if not chat_id:
+        return
 
     try:
-        await _call("imconnector.send.messages", {
-            "CONNECTOR": settings.bitrix_connector_id,
-            "LINE": settings.bitrix_connector_line_id,
-            "MESSAGES": [{
-                "user": {
-                    "id": phone,
-                    "name": f"WhatsApp *{phone[-4:]}",
-                    "phone": phone,
-                },
-                "message": {
-                    "id": f"vera_{phone}_{ts}",
-                    "date": ts,
-                    "text": f"🤖 {text}",
-                },
-                "chat": {
-                    "id": external_chat_id,
-                },
-            }],
+        await _call("im.message.add", {
+            "DIALOG_ID": f"chat{chat_id}",
+            "MESSAGE": f"🤖 {text}",
         })
         logger.info("connector_bot_msg_sent", extra={"phone_tail": phone[-4:]})
     except Exception as exc:
