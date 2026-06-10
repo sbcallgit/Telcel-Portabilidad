@@ -33,10 +33,21 @@ class BitrixClient:
             raise BitrixError("Bitrix network error", retriable=True, original=exc) from exc
 
     async def buscar_deal_por_telefono(self, telefono: str) -> str:
-        """Busca el deal más reciente en pipeline 90 cuyo título contiene los últimos 4 dígitos del teléfono."""
+        """Busca el deal del imconnector (Open Lines) para el teléfono dado.
+
+        Filtra por SOURCE_ID del conector activo para excluir deals creados por el bot.
+        Si no hay coincidencia con SOURCE_ID, busca cualquier deal activo como fallback.
+        """
         tail = telefono[-4:]
+        source_id = f"{settings.bitrix_connector_line_id}|{settings.bitrix_connector_id.upper()}"
+
+        # Búsqueda principal: solo deals creados por el canal Open Lines
         result = await self._call("crm.deal.list", {
-            "filter": {"CATEGORY_ID": settings.bitrix_pipeline_id, "%TITLE": f"*{tail}"},
+            "filter": {
+                "CATEGORY_ID": settings.bitrix_pipeline_id,
+                "%TITLE": f"*{tail}",
+                "SOURCE_ID": source_id,
+            },
             "order": {"DATE_CREATE": "DESC"},
             "select": ["ID", "STAGE_ID", "TITLE"],
             "start": 0,
@@ -44,8 +55,26 @@ class BitrixClient:
         items = result.get("result", [])
         if items:
             deal_id = str(items[0]["ID"])
-            logger.info("bitrix_deal_encontrado", extra={"phone_tail": tail, "deal_id": deal_id})
+            logger.info("bitrix_deal_encontrado", extra={"phone_tail": tail, "deal_id": deal_id, "source": "openlines"})
             return deal_id
+
+        # Fallback: cualquier deal activo con ese teléfono (no ganado/perdido)
+        result2 = await self._call("crm.deal.list", {
+            "filter": {
+                "CATEGORY_ID": settings.bitrix_pipeline_id,
+                "%TITLE": f"*{tail}",
+                "!=STAGE_ID": ["C90:WON", "C90:LOSE"],
+            },
+            "order": {"DATE_CREATE": "DESC"},
+            "select": ["ID", "STAGE_ID", "TITLE"],
+            "start": 0,
+        })
+        items2 = result2.get("result", [])
+        if items2:
+            deal_id = str(items2[0]["ID"])
+            logger.info("bitrix_deal_encontrado", extra={"phone_tail": tail, "deal_id": deal_id, "source": "fallback"})
+            return deal_id
+
         return ""
 
     async def crear_deal(self, telefono: str, datos: dict, stage_id: str | None = None) -> dict:

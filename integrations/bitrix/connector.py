@@ -70,11 +70,13 @@ async def _get_or_create_external_chat_id(phone: str) -> str:
     return new_id
 
 
-async def _save_session(phone: str, session_id: str, chat_id: str) -> None:
+async def _save_session(phone: str, session_id: str, chat_id: str, deal_id: str = "") -> None:
     redis = await get_redis()
     await redis.setex(f"connector_session:{phone}", _SESSION_TTL, session_id)
     if chat_id:
         await redis.setex(f"connector_chat:{phone}", _SESSION_TTL, chat_id)
+    if deal_id:
+        await redis.setex(f"connector_deal:{phone}", _SESSION_TTL, deal_id)
 
 
 async def _get_session(phone: str) -> tuple[str, str]:
@@ -122,14 +124,16 @@ async def send_user_message(phone: str, text: str) -> str | None:
         session_data = items[0].get("session", {}) if items else {}
         session_id = str(session_data.get("ID", ""))
         chat_id = str(session_data.get("CHAT_ID", ""))
+        deal_id = str(session_data.get("CRM_ENTITY_ID", "")) if session_data.get("CRM_ENTITY_TYPE") == "DEAL" else ""
 
         if session_id:
-            await _save_session(phone, session_id, chat_id)
+            await _save_session(phone, session_id, chat_id, deal_id)
 
         logger.info("connector_user_msg_sent", extra={
             "phone_tail": phone[-4:],
             "session_id": session_id,
             "chat_id": chat_id,
+            "deal_id": deal_id or "not_in_response",
         })
         return session_id or None
 

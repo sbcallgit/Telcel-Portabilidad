@@ -135,10 +135,18 @@ async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
         return {}
     try:
         from integrations.bitrix.client import BitrixClient
+        from integrations.redis_client import get_redis
         bx = BitrixClient()
 
-        # Buscar deal existente creado por el imconnector al abrir el chat
-        deal_id = await bx.buscar_deal_por_telefono(phone)
+        # 1. Prioridad: deal vinculado al canal Open Lines activo (guardado por connector.py)
+        redis = await get_redis()
+        deal_id = await redis.get(f"connector_deal:{phone}") or ""
+        if deal_id:
+            logger.info("bitrix_deal_desde_redis", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
+
+        # 2. Fallback: buscar por últimos 4 dígitos del teléfono
+        if not deal_id:
+            deal_id = await bx.buscar_deal_por_telefono(phone)
 
         if not deal_id:
             # Fallback: crear deal si Bitrix no lo creó automáticamente
