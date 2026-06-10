@@ -2,8 +2,6 @@
 
 import logging
 
-from langchain_core.messages import AIMessage
-
 from agents.portabilidad.state import PortabilidadState
 from config.settings import settings
 
@@ -92,48 +90,6 @@ async def _try_bitrix(context: dict, phone: str, motivo: str, existing_deal_id: 
         return existing_deal_id
 
 
-def _build_handoff_message(context: dict, motivo: str) -> str:
-    """Protocolo de 4 pasos (spec sec. 10.2): explica, confirma datos, tiempo, pregunta."""
-    nombre = context.get("nombre", "")
-    nombre_corto = nombre.split()[0] if nombre else ""
-
-    if motivo == "caso_sensible":
-        return (
-            "Lamentamos mucho lo que estás pasando. "
-            "Te conecto con un asesor que puede orientarte con más calma. "
-            "Gracias por tu paciencia."
-        )
-
-    if motivo == "seguimiento":
-        return (
-            "Perfecto, queda registrado. Un asesor de portabilidad te contactará "
-            "cuando estés listo para continuar. ¡Que tengas excelente día!"
-        )
-
-    if motivo == "solicitud_directa":
-        return (
-            "Claro, ahora mismo te conecto con un asesor. "
-            "En unos minutos te contacta para ayudarte. "
-            "¿Hay algo más que quieras que le comunique?"
-        )
-
-    if motivo == "max_objeciones_alcanzado":
-        return (
-            "Entiendo perfectamente. Te dejo aquí mi contacto por si más adelante "
-            "quieres aprovechar la promo. ¡Que tengas excelente día! 🌟"
-        )
-
-    # Handoff normal post-cierre (spec sec. 10.2 — 4 pasos)
-    nombre_line = f"Ya tengo tu información registrada, {nombre_corto}." if nombre_corto else "Ya tengo tu información registrada."
-    return (
-        f"¡Perfecto! 🙌 {nombre_line}\n"
-        "Te voy a pasar con un asesor de portabilidad que va a generar tu NIP "
-        "y coordinar la entrega de tu CHIP en el CAC más cercano.\n"
-        "Te contacta en los próximos minutos.\n"
-        "¿Alguna duda antes de pasarte con él?"
-    )
-
-
 async def escalate_node(state: PortabilidadState) -> dict:
     # Evitar doble escalamiento — limpiar flag y dejar que _fin_node maneje el resto
     if state.get("etapa") == "fin":
@@ -155,17 +111,11 @@ async def escalate_node(state: PortabilidadState) -> dict:
         },
     )
 
-    base = {
+    # El nodo fuente (sondeo, oferta, cierre, objeciones) ya envió su mensaje al usuario
+    # cuando seteó escalate_to_human. escalate_node solo actualiza estado y Bitrix.
+    return {
         "bitrix_lead_id": deal_id,
         "bitrix_etapa": "listo_para_portabilidad",
         "etapa": "fin",
         "escalate_to_human": False,
     }
-
-    # Cuando viene encadenado desde cierre_node, ese nodo ya envió el resumen con los datos.
-    # Solo agregar mensaje en escalaciones directas (solicitud_directa, caso_sensible, etc.)
-    if motivo == "cierre":
-        return base
-
-    handoff_msg = _build_handoff_message(context, motivo)
-    return {**base, "messages": [AIMessage(content=handoff_msg)]}
