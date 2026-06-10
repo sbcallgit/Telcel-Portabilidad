@@ -28,9 +28,20 @@ _POSPAGO = [
 
 
 async def _find_objection(text: str) -> dict | None:
-    """Busca la respuesta más relevante en el banco de objeciones por similitud de texto."""
+    """Busca la respuesta más relevante usando RAG semántico en Qdrant.
+
+    Fallback a búsqueda por categoría en PostgreSQL si Qdrant no está disponible.
+    """
+    try:
+        from integrations.qdrant.client import search_objection
+        result = await search_objection(text)
+        if result:
+            return result
+    except Exception as exc:
+        logger.warning("qdrant_fallback", extra={"error": str(exc)})
+
+    # Fallback PostgreSQL (keyword → categoría)
     lower = text.lower()
-    # Prioridad: buscar por categoría basado en palabras clave
     categoria = None
     if any(w in lower for w in ["caro", "precio", "cobr", "cost"]):
         categoria = "precio"
@@ -42,8 +53,6 @@ async def _find_objection(text: str) -> dict | None:
         categoria = "timing"
     elif any(w in lower for w in ["señal", "cobertura", "servicio", "red"]):
         categoria = "cobertura"
-    elif any(w in lower for w in ["datos", "privacidad", "información personal"]):
-        categoria = "privacidad"
 
     if categoria:
         row = await db.fetchrow(
@@ -53,7 +62,6 @@ async def _find_objection(text: str) -> dict | None:
         if row:
             return dict(row)
 
-    # Fallback: primera objeción disponible
     row = await db.fetchrow("SELECT texto, categoria, respuesta FROM objeciones LIMIT 1")
     return dict(row) if row else None
 

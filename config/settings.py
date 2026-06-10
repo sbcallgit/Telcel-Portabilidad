@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = "tg_webhook_secret_dev"
 
+    # Qdrant (vector database — RAG de objeciones)
+    qdrant_url: str = "http://qdrant:6333"
+    qdrant_api_key: str = ""
+    qdrant_embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
     # Debounce de mensajes WhatsApp (ms; 0 = desactivado)
     debounce_window_ms: int = 1500
 

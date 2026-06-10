@@ -225,3 +225,10 @@ async def load() -> None:
             row["respuesta"],
         )
     logger.info("objeciones_loaded")
+
+    # Indexar en Qdrant para búsqueda semántica (descarga el modelo en primer uso)
+    try:
+        from integrations.qdrant.client import index_objeciones
+        await index_objeciones(OBJECIONES)
+    except Exception as exc:
+        logger.warning("qdrant_index_skipped", extra={"error": str(exc)})

@@ -23,13 +23,39 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from integrations.postgres.client import close_pool, create_pool
     from integrations.redis_client import close_redis, get_redis
     from jobs.connector_poll import start_connector_poll, stop_connector_poll
+    from agents.portabilidad.graph import setup_graph
+
     await create_pool()
     await get_redis()
+
+    # Checkpointer persistente en PostgreSQL (reemplaza MemorySaver en memoria)
+    _pg_pool = None
+    try:
+        from psycopg_pool import AsyncConnectionPool
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        _pg_pool = AsyncConnectionPool(
+            conninfo=settings.database_dsn,
+            max_size=10,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+            open=False,
+        )
+        await _pg_pool.open()
+        checkpointer = AsyncPostgresSaver(_pg_pool)
+        await checkpointer.setup()  # Crea tablas de checkpoints si no existen
+        await setup_graph(checkpointer)
+        logger.info("postgres_checkpointer_ready")
+    except Exception as exc:
+        logger.warning("postgres_checkpointer_failed", extra={"error": str(exc)})
+        await setup_graph()  # Fallback a MemorySaver
+
     await start_connector_poll()
     yield
     await stop_connector_poll()
     await close_redis()
     await close_pool()
+    if _pg_pool:
+        await _pg_pool.close()
     logger.info("app_shutdown")
 
 

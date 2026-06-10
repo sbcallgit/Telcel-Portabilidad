@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agents.portabilidad.graph import agent_graph
+from agents.portabilidad.graph import get_agent_graph
 from config.settings import settings
 from integrations import debounce
 from integrations.bitrix import connector as bitrix_connector
@@ -20,7 +20,7 @@ async def _process_telegram_message(thread_id: str, text: str, chat_id: int, pho
     """Callback que recibe el texto ya agrupado y corre el agente."""
     config = {"configurable": {"thread_id": thread_id}}
     try:
-        result = await agent_graph.ainvoke(
+        result = await get_agent_graph().ainvoke(
             {
                 "messages": [HumanMessage(content=text)],
                 "session_id": thread_id,

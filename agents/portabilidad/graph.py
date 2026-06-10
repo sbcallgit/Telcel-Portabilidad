@@ -3,7 +3,6 @@
 import logging
 
 from langchain_core.messages import SystemMessage
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from agents.llm import get_llm
@@ -27,6 +26,10 @@ from agents.portabilidad.state import PortabilidadState
 from agents.portabilidad.utils import split_msg
 
 logger = logging.getLogger(__name__)
+
+# Grafo compilado — se inicializa en setup_graph() desde el lifespan de FastAPI.
+# Hasta que se llame, cae en fallback MemorySaver para pruebas/seed.
+_agent_graph = None
 
 
 async def _fin_node(state: PortabilidadState) -> dict:
@@ -108,7 +111,7 @@ def _build() -> StateGraph:
     for node_name in ["validacion", "sondeo", "oferta", "objeciones", "escalate", "fin"]:
         graph.add_edge(node_name, END)
 
-    # cierre → escalate cuando los KPIs están completos (mismo turno, sin esperar otro mensaje)
+    # cierre → escalate cuando los KPIs están completos (mismo turno)
     graph.add_conditional_edges(
         "cierre",
         lambda s: "escalate" if s.get("etapa") == "escalado" else END,
@@ -118,6 +121,25 @@ def _build() -> StateGraph:
     return graph
 
 
-# Singleton compilado con checkpointer en memoria (thread_id = phone/chat_id)
-_checkpointer = MemorySaver()
-agent_graph = _build().compile(checkpointer=_checkpointer)
+async def setup_graph(checkpointer=None) -> None:
+    """Inicializa el grafo con el checkpointer indicado.
+
+    Llamar desde el lifespan de FastAPI con AsyncPostgresSaver.
+    Si no se proporciona checkpointer usa MemorySaver (dev/tests).
+    """
+    global _agent_graph
+    if checkpointer is None:
+        from langgraph.checkpoint.memory import MemorySaver
+        checkpointer = MemorySaver()
+        logger.warning("graph_using_memory_checkpointer")
+    _agent_graph = _build().compile(checkpointer=checkpointer)
+    logger.info("graph_initialized", extra={"checkpointer": type(checkpointer).__name__})
+
+
+def get_agent_graph():
+    """Retorna el grafo compilado. Inicializa con MemorySaver si aún no se configuró."""
+    global _agent_graph
+    if _agent_graph is None:
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(setup_graph())
+    return _agent_graph
