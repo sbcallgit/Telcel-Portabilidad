@@ -276,7 +276,7 @@ webhook → mark_as_read(msg_id) → doble check azul + typing indicator al usua
 send_user_message() → imconnector.send.messages → Open Lines 542
     │                   └─ si sesión nueva: _fetch_openlines_deal_async() (bg, 3s delay)
     ▼  (debounce 10s + agente)
-send_bot_message() → im.message.add → mismo chat en Open Lines (lado operador 🤖)
+send_bot_message() → imconnector.send.messages (user.id=phone, prefijo "🤖 Vera |") → mismo chat
 
 Asesor responde en Bitrix Open Lines
     │
@@ -299,7 +299,7 @@ im.dialog.messages.get → _forward_to_user() → Telegram o WhatsApp
 
 - **Auth:** el token OAuth va en el **body JSON** como `"auth": token`, NO como header `Authorization: Bearer`.
 - **Estructura de mensajes de usuario:** claves **lowercase** (`user`, `message`, `chat`). Uppercase (`USER`, `MESSAGE`) no funciona.
-- **Mensajes del bot:** `send_bot_message()` usa `im.message.add` con `DIALOG_ID: chat{chat_id}` (NO `imconnector.send.messages`). Así aparecen en el lado del **operador** (saliente) en lugar del lado externo. Prefijo `🤖` distingue respuestas automáticas.
+- **Mensajes del bot:** `send_bot_message()` usa `imconnector.send.messages` con el **mismo `user.id = phone`** que el usuario real. Usar un `user.id` diferente (ej. `"bot_{phone}"`) hace que imconnector abra una segunda sesión de Open Lines → segundo deal duplicado. El prefijo `"🤖 Vera |"` en el texto distingue visualmente las respuestas del bot. `im.message.add` no funciona en chats de Open Lines (error `CANCELED: No puede enviar mensajes al chat especificado`).
 - **Deal asíncrono:** Bitrix crea el deal via Open Lines de forma asíncrona. `_fetch_openlines_deal_async()` espera 3s y busca el deal con `buscar_deal_por_telefono()`, guardándolo en Redis `connector_deal:{phone}` antes de que el debounce (10s) dispare. Así `validacion_node` reutiliza el deal de Open Lines en lugar de crear un fallback sin vínculo al canal.
 - **Conector activo:** `telegram_ai_agent` (ya registrado en el portal b24-ahyle8.bitrix24.mx, activado en línea 542). No usar conectores nuevos — registrar uno nuevo con una app local requiere placement handler de marketplace.
 - **Registro OAuth:** flujo en `GET /bitrix/auth` → Bitrix redirige a `BITRIX_PUBLIC_URL/bitrix/app` → tokens en Redis `bitrix:oauth_tokens`. Re-ejecutar si expira el refresh_token.
@@ -341,6 +341,7 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **Connector poll:** `connector_poll.py` corre como `asyncio.Task` en el lifespan de FastAPI (no como job de APScheduler). Intervalo: 30 segundos. Procesamiento concurrente con `asyncio.gather`.
 - **Deal en primer contacto:** Bitrix Open Lines / imconnector crea automáticamente un deal cuando el chat de WhatsApp se abre. `validacion_node` llama `buscar_deal_por_telefono()` (búsqueda por `%TITLE: "*{last4}"`) para encontrar ese deal y reutilizarlo; solo crea un deal nuevo como fallback si no encuentra ninguno. `escalate_node` actualiza el mismo deal con KPIs y stage. **Nunca crear un segundo deal para el mismo número** — duplicar el deal rompe el seguimiento en Open Lines.
 - **Rebuild obligatorio tras cambios de código:** `docker compose restart api` NO recarga el código (la imagen está horneada en build time). Siempre usar `docker compose build api && docker compose up -d api` para que los cambios tengan efecto en producción.
-- **WhatsApp typing indicator:** `WhatsAppClient.mark_as_read(message_id)` envía en una sola llamada el doble check azul **y** el indicador "...escribiendo" (`typing_indicator: {"type": "text"}`). Se llama al recibir cada mensaje, antes del debounce. El indicador se auto-descarta a los 25s o al llegar la respuesta del bot. API: `POST /{phone_id}/messages` con `status: "read"` + `typing_indicator`.
+- **WhatsApp typing indicator:** `WhatsAppClient.mark_as_read(message_id)` envía en una sola llamada el doble check azul **y** el indicador "...escribiendo" (`typing_indicator: {"type": "text"}`). Se llama al recibir cada mensaje, antes del debounce. El indicador se auto-descarta a los 25s o al llegar la respuesta del bot. API: `POST /{phone_id}/messages` con `status: "read"` + `typing_indicator`. Documentación oficial: `developers.facebook.com/docs/whatsapp/cloud-api/typing-indicators/`.
+- **Anti-duplicado de deals:** `send_bot_message` DEBE usar el mismo `user.id` que los mensajes del usuario. Un `user.id` diferente abre segunda sesión de Open Lines → segundo deal. El poll filtra mensajes del bot (tienen `CONNECTOR_MID`) → no se reenvían a WhatsApp.
 - **`_fin_node` re-escalación:** cuando el estado es `etapa: fin` (post-escalamiento), el nodo detecta nuevos intents sin borrar el checkpoint: palabras de escalación → mueve deal a `C90:UC_8WB2DT`; palabras de seguimiento → confirma; palabras de decisión ("ya decidí", "quiero portarme") → mueve deal a `C90:PROSPECTO`. Usa `_try_bitrix()` directamente desde `graph.py`.
 - **`escalate_node` sin mensajes:** el nodo solo actualiza Bitrix y el estado del agente. No agrega `AIMessage` — el mensaje de confirmación al usuario lo genera el nodo que llama a `escalate` (cierre, objeciones, etc.).
