@@ -255,8 +255,9 @@ Los system prompts del agente viven en `prompts/*.txt` — **no** en el código 
 | `oferta_principal.txt` | Re-presentación o ajuste de la promo en el nodo de oferta |
 | `objeciones.txt` | Rebate de objeciones usando el banco de respuestas de la BD |
 | `cierre_fallback.txt` | Fallback cuando el cliente no dio un campo KPI claramente |
+| `prompt_unificado.md` | **Referencia consolidada** — todos los bloques ensamblados en un solo documento (catálogo, reglas, horarios, saludos, formato). Útil para revisar el comportamiento completo de Vera, hacer pruebas en playground o migrar a un agente de nodo único. |
 
-Los archivos usan placeholders `{NOMBRE}` que `render_prompt()` (`agents/portabilidad/utils.py`) sustituye en tiempo de ejecución con las constantes de `context.py` y variables dinámicas (monto de recarga, promos, etc.).
+Los archivos `.txt` usan placeholders `{NOMBRE}` que `render_prompt()` (`agents/portabilidad/utils.py`) sustituye en tiempo de ejecución con las constantes de `context.py` y variables dinámicas (monto de recarga, promos, etc.).
 
 ---
 
