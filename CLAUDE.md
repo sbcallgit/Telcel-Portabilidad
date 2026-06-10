@@ -131,7 +131,9 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `BITRIX_WEBHOOK_URL` | URL del webhook entrante de Bitrix24 (CRM: crear/mover deals) |
 | `BITRIX_PIPELINE_ID` | ID del pipeline de deals (actualmente `90`) |
 | `BITRIX_STAGE_IA_PORTA` | Stage ID inicial al crear deal en primer contacto (actualmente `C90:NEW`) |
-| `BITRIX_STAGE_LISTO` | Stage ID para "Listo para Portabilidad" (actualmente `C90:UC_4HW32Y`) |
+| `BITRIX_STAGE_PROSPECTO` | Stage ID para KPIs completos — listo para portabilidad (`C90:PROSPECTO`) |
+| `BITRIX_STAGE_SEGUIMIENTO` | Stage ID para usuario que quiere ser contactado después (`C90:SEGUIMIENTO`) |
+| `BITRIX_STAGE_ESCALAMIENTO` | Stage ID para solicitud de asesor humano (`C90:UC_8WB2DT`) |
 | `BITRIX_CLIENT_ID` | Client ID de la app local OAuth de Bitrix24 |
 | `BITRIX_CLIENT_SECRET` | Client Secret de la app local OAuth |
 | `BITRIX_CONNECTOR_ID` | ID del conector imconnector registrado en el portal (`telegram_ai_agent`) |
@@ -156,12 +158,16 @@ El pipeline usa `crm.deal.*` con `CATEGORY_ID=90`. Las etapas siguen el formato 
 | Etapa | Stage ID | Significado | Cuándo se asigna |
 |---|---|---|---|
 | Lead Nuevo / IA Porta | `C90:NEW` | Deal en manos del bot | Al primer mensaje del usuario (`validacion_node`) |
-| En Seguimiento | `C90:UC_4HW32Y` | Datos completos, listo para asesor | Al completar el cierre (`escalate_node`) |
+| Prospecto | `C90:PROSPECTO` | KPIs completos — listo para portabilidad | Al completar cierre con nombre, número y compañía (`escalate_node`, motivo `cierre`) |
+| Seguimiento | `C90:SEGUIMIENTO` | Usuario quiere ser contactado después | Cuando el usuario expresa intención de continuar más adelante (`motivo: seguimiento, max_objeciones_alcanzado`) |
+| Escalamiento Humano | `C90:UC_8WB2DT` | Solicita asesor humano ahora | Solicitud directa, caso sensible, ARCO, Telcel→Telcel, cambio de titularidad (`escalate_node`) |
 | Venta | `C90:WON` | Solo leads con Venta Exitosa | Manual por el asesor |
 | Recuperación | `C90:8` | Lead a reactivar | Regla automática Bitrix (24h sin avance) |
 | Caído | `C90:LOSE` | Lead perdido (con tipificación) | Manual por el asesor |
 
-**Nota importante:** El deal se crea al primer contacto en `validacion_node` (stage `C90:NEW`). En `escalate_node` se actualiza el mismo deal con nombre, comentarios y stage `C90:UC_4HW32Y`. Nunca se crean dos deals para el mismo usuario.
+**Resolución de stage en `escalate_node`:** `_resolve_stage(motivo)` mapea el `motivo_escalacion` al stage correcto. El deal se crea al primer contacto en `validacion_node` (`C90:NEW`) y se actualiza en `escalate_node` con el stage según intención. Nunca se crean dos deals para el mismo usuario.
+
+**Detección de intent `seguimiento`:** los nodos `sondeo`, `oferta`, `objeciones` y `cierre` detectan frases como "más adelante", "llámame después", "contáctenme", "ahorita no puedo", etc. mediante la lista `_SEGUIMIENTO`.
 
 ---
 
