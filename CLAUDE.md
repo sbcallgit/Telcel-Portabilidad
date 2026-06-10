@@ -142,7 +142,7 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `ANTHROPIC_API_KEY` | API key de Claude (Anthropic) |
 | `DB_PASSWORD` | Contraseña de PostgreSQL |
 | `REDIS_URL` | URL de conexión a Redis |
-| `DEBOUNCE_WINDOW_MS` | Ventana de debounce en ms (0 = desactivado, producción: `5000`) |
+| `DEBOUNCE_WINDOW_MS` | Ventana de debounce en ms (0 = desactivado, producción: `10000`) |
 | `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram (canal de pruebas) |
 | `TELEGRAM_WEBHOOK_SECRET` | Secret para validar webhooks de Telegram (X-Telegram-Bot-Api-Secret-Token) |
 | `QDRANT_URL` | URL del servidor Qdrant (default: `http://qdrant:6333`) |
@@ -270,11 +270,14 @@ El espejeo de mensajes usa la API `imconnector` vía OAuth (no el webhook REST b
 Usuario (Telegram/WhatsApp)
     │  mensaje
     ▼
-webhook → send_user_message() → imconnector.send.messages → Open Lines 542
+webhook → mark_as_read(msg_id) → doble check azul + typing indicator al usuario
     │
-    ▼  (debounce + agente)
-send_bot_message() → imconnector.send.messages → mismo chat en Open Lines
-    
+    ▼
+send_user_message() → imconnector.send.messages → Open Lines 542
+    │                   └─ si sesión nueva: _fetch_openlines_deal_async() (bg, 3s delay)
+    ▼  (debounce 10s + agente)
+send_bot_message() → im.message.add → mismo chat en Open Lines (lado operador 🤖)
+
 Asesor responde en Bitrix Open Lines
     │
     ▼  (polling cada 30s — connector_poll.py)
@@ -285,16 +288,19 @@ im.dialog.messages.get → _forward_to_user() → Telegram o WhatsApp
 
 | Clave Redis | Contenido |
 |---|---|
-| `connector_ext_chat:{phone}` | external_chat_id para la sesión activa (TTL 24h) |
-| `connector_session:{phone}` | session_id de Open Lines devuelto por Bitrix |
-| `connector_chat:{phone}` | chat_id interno de Bitrix (para im.dialog.messages.get) |
+| `connector_ext_chat:{phone}` | external_chat_id para la sesión activa (TTL **90 días** — preserva el vínculo teléfono↔deal entre visitas) |
+| `connector_session:{phone}` | session_id de Open Lines devuelto por Bitrix (TTL 24h) |
+| `connector_chat:{phone}` | chat_id interno de Bitrix (para im.dialog.messages.get) (TTL 24h) |
+| `connector_deal:{phone}` | deal_id vinculado al canal Open Lines (TTL 24h) |
 | `connector_last_msg:{phone}` | cursor: ID del último mensaje procesado del asesor |
 | `connector_delivered:{msg_id}` | deduplicación de mensajes ya reenviados (TTL 24h) |
 
 ### Notas críticas de imconnector
 
 - **Auth:** el token OAuth va en el **body JSON** como `"auth": token`, NO como header `Authorization: Bearer`.
-- **Estructura de mensajes:** claves **lowercase** (`user`, `message`, `chat`). Uppercase (`USER`, `MESSAGE`) no funciona.
+- **Estructura de mensajes de usuario:** claves **lowercase** (`user`, `message`, `chat`). Uppercase (`USER`, `MESSAGE`) no funciona.
+- **Mensajes del bot:** `send_bot_message()` usa `im.message.add` con `DIALOG_ID: chat{chat_id}` (NO `imconnector.send.messages`). Así aparecen en el lado del **operador** (saliente) en lugar del lado externo. Prefijo `🤖` distingue respuestas automáticas.
+- **Deal asíncrono:** Bitrix crea el deal via Open Lines de forma asíncrona. `_fetch_openlines_deal_async()` espera 3s y busca el deal con `buscar_deal_por_telefono()`, guardándolo en Redis `connector_deal:{phone}` antes de que el debounce (10s) dispare. Así `validacion_node` reutiliza el deal de Open Lines en lugar de crear un fallback sin vínculo al canal.
 - **Conector activo:** `telegram_ai_agent` (ya registrado en el portal b24-ahyle8.bitrix24.mx, activado en línea 542). No usar conectores nuevos — registrar uno nuevo con una app local requiere placement handler de marketplace.
 - **Registro OAuth:** flujo en `GET /bitrix/auth` → Bitrix redirige a `BITRIX_PUBLIC_URL/bitrix/app` → tokens en Redis `bitrix:oauth_tokens`. Re-ejecutar si expira el refresh_token.
 - **Polling concurrente:** `_poll_once` procesa todos los teléfonos activos en paralelo con `asyncio.gather`. El polling usa `_call_poll` (sin reintentos, timeout 20s) para no bloquear el ciclo si Bitrix tarda.
@@ -329,9 +335,12 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **LADAs:** tabla técnica, no parte del guion. El bot la consulta internamente para decidir si continúa el flujo o deriva a CAC.
 - **Versiones de prompt:** editar los archivos en `prompts/` directamente. Para historial de versiones usar git. La carpeta `knowledge/prompts/` es para specs de auditoría, no para los prompts activos.
 - **Jobs timezone:** siempre `America/Monterrey` explícito. El horario de portabilidad es L-S 9am–9pm; sin domingos.
-- **Debounce:** configurar `DEBOUNCE_WINDOW_MS` en `.env`. Valor actual en producción: `5000` ms. Poner `0` solo en pruebas unitarias o entornos donde cada mensaje debe procesarse de forma independiente.
+- **Debounce:** configurar `DEBOUNCE_WINDOW_MS` en `.env`. Valor actual en producción: `10000` ms (10s). Poner `0` solo en pruebas unitarias o entornos donde cada mensaje debe procesarse de forma independiente.
 - **Telegram:** canal de pruebas que corre el mismo agente y el mismo debounce que WhatsApp. El `thread_id` de LangGraph es `str(chat_id)` en Telegram y `phone` en WhatsApp. El `phone` en Telegram tiene prefijo `tg_` (ej. `tg_8211184685`).
 - **Bitrix deals vs leads:** el pipeline 90 es de **deals** (`crm.deal.*`). No usar `crm.lead.*` — son entidades distintas con etapas distintas.
 - **Connector poll:** `connector_poll.py` corre como `asyncio.Task` en el lifespan de FastAPI (no como job de APScheduler). Intervalo: 30 segundos. Procesamiento concurrente con `asyncio.gather`.
 - **Deal en primer contacto:** Bitrix Open Lines / imconnector crea automáticamente un deal cuando el chat de WhatsApp se abre. `validacion_node` llama `buscar_deal_por_telefono()` (búsqueda por `%TITLE: "*{last4}"`) para encontrar ese deal y reutilizarlo; solo crea un deal nuevo como fallback si no encuentra ninguno. `escalate_node` actualiza el mismo deal con KPIs y stage. **Nunca crear un segundo deal para el mismo número** — duplicar el deal rompe el seguimiento en Open Lines.
 - **Rebuild obligatorio tras cambios de código:** `docker compose restart api` NO recarga el código (la imagen está horneada en build time). Siempre usar `docker compose build api && docker compose up -d api` para que los cambios tengan efecto en producción.
+- **WhatsApp typing indicator:** `WhatsAppClient.mark_as_read(message_id)` envía en una sola llamada el doble check azul **y** el indicador "...escribiendo" (`typing_indicator: {"type": "text"}`). Se llama al recibir cada mensaje, antes del debounce. El indicador se auto-descarta a los 25s o al llegar la respuesta del bot. API: `POST /{phone_id}/messages` con `status: "read"` + `typing_indicator`.
+- **`_fin_node` re-escalación:** cuando el estado es `etapa: fin` (post-escalamiento), el nodo detecta nuevos intents sin borrar el checkpoint: palabras de escalación → mueve deal a `C90:UC_8WB2DT`; palabras de seguimiento → confirma; palabras de decisión ("ya decidí", "quiero portarme") → mueve deal a `C90:PROSPECTO`. Usa `_try_bitrix()` directamente desde `graph.py`.
+- **`escalate_node` sin mensajes:** el nodo solo actualiza Bitrix y el estado del agente. No agrega `AIMessage` — el mensaje de confirmación al usuario lo genera el nodo que llama a `escalate` (cierre, objeciones, etc.).
