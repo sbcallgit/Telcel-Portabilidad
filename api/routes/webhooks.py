@@ -34,7 +34,6 @@ _wa = WhatsAppClient()
 
 async def _process_message(phone: str, text: str) -> None:
     """Callback que recibe el texto ya agrupado y corre el agente."""
-    await _wa.show_typing(phone)
     config = {"configurable": {"thread_id": phone}}
     try:
         result = await get_agent_graph().ainvoke(

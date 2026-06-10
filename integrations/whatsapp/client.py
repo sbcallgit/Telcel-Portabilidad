@@ -51,7 +51,11 @@ class WhatsAppClient:
             raise WhatsAppError("WhatsApp network error", retriable=True, original=exc) from exc
 
     async def mark_as_read(self, message_id: str) -> None:
-        """Marca el mensaje entrante como leído (doble check azul). Best-effort."""
+        """Marca el mensaje como leído (doble check azul) y activa '...escribiendo'.
+
+        El typing indicator se auto-descarta a los 25s o al enviar la respuesta.
+        Best-effort: un fallo no interrumpe el flujo.
+        """
         url = f"{_BASE_URL}/{self._phone_id}/messages"
         try:
             async with httpx.AsyncClient(timeout=5) as client:
@@ -61,12 +65,9 @@ class WhatsAppClient:
                         "messaging_product": "whatsapp",
                         "status": "read",
                         "message_id": message_id,
+                        "typing_indicator": {"type": "text"},
                     },
                     headers={"Authorization": f"Bearer {self._token}"},
                 )
         except Exception as exc:
             logger.debug("whatsapp_read_receipt_failed", extra={"error": str(exc)})
-
-    async def show_typing(self, to: str) -> None:
-        """No-op: WhatsApp Cloud API no soporta typing indicators vía API.
-        El double check azul (mark_as_read) es la señal disponible."""
