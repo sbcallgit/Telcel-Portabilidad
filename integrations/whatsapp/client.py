@@ -49,3 +49,39 @@ class WhatsAppClient:
             ) from exc
         except httpx.RequestError as exc:
             raise WhatsAppError("WhatsApp network error", retriable=True, original=exc) from exc
+
+    async def mark_as_read(self, message_id: str) -> None:
+        """Marca el mensaje entrante como leído (doble check azul). Best-effort."""
+        url = f"{_BASE_URL}/{self._phone_id}/messages"
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.post(
+                    url,
+                    json={
+                        "messaging_product": "whatsapp",
+                        "status": "read",
+                        "message_id": message_id,
+                    },
+                    headers={"Authorization": f"Bearer {self._token}"},
+                )
+        except Exception as exc:
+            logger.debug("whatsapp_read_receipt_failed", extra={"error": str(exc)})
+
+    async def show_typing(self, to: str) -> None:
+        """Muestra el indicador '...escribiendo' al destinatario. Best-effort."""
+        url = f"{_BASE_URL}/{self._phone_id}/messages"
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                await client.post(
+                    url,
+                    json={
+                        "messaging_product": "whatsapp",
+                        "recipient_type": "individual",
+                        "to": to,
+                        "type": "chat_state",
+                        "chat_state": {"status": "active"},
+                    },
+                    headers={"Authorization": f"Bearer {self._token}"},
+                )
+        except Exception as exc:
+            logger.debug("whatsapp_typing_failed", extra={"error": str(exc)})

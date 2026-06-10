@@ -34,6 +34,7 @@ _wa = WhatsAppClient()
 
 async def _process_message(phone: str, text: str) -> None:
     """Callback que recibe el texto ya agrupado y corre el agente."""
+    await _wa.show_typing(phone)
     config = {"configurable": {"thread_id": phone}}
     try:
         result = await get_agent_graph().ainvoke(
@@ -117,6 +118,9 @@ async def receive_message(request: Request) -> dict:
     await redis.set(dedup_key, "1", ex=60)
 
     logger.info("webhook_message_received", extra={"phone_tail": phone[-4:], "bytes": len(body)})
+
+    # Marcar como leído inmediatamente (muestra doble check azul al usuario)
+    await _wa.mark_as_read(message_id)
 
     # Espejear mensaje del usuario en Bitrix Open Lines (por mensaje, no por turno)
     try:
