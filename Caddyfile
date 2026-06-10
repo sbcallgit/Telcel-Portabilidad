@@ -36,7 +36,7 @@ qdrant-portabilidad.callcomcc.io {
     }
 
     basic_auth {
-        admin $2a$14$ciA646zdSt.HuNO82mm0NuYbxcDB3bjTX9NjApS91eWYbTBdN31rG
+        admin $2a$14$4SgGQuXZnaeTmEiqTiDLwObujdWkF7hXbOGhxPOXKVmZl5dL5KzwK
     }
 
     header {
