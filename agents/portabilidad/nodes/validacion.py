@@ -27,6 +27,14 @@ _PHONE_RE = re.compile(r"(?<!\d)(\d{10})(?!\d)")
 _LADA_RE = re.compile(r"\b(\d{3})\b")
 _ESCALATION_WORDS = ["asesor", "humano", "persona real", "agente", "supervisor"]
 _SENSITIVE_WORDS = ["murió", "falleció", "muerto", "difunto", "funeral", "accidente", "emergencia"]
+_SEGUIMIENTO = [
+    "llámame después", "llamame despues", "llámame mañana", "llamame mañana",
+    "contáctenme", "contactenme", "me contactan", "me llaman", "llámenme", "llamenme",
+    "más adelante", "mas adelante", "en otro momento", "luego te confirmo",
+    "mañana te digo", "ahorita no puedo", "ahorita no", "después me comunico",
+    "me comunico después", "me comunico despues", "ya me comunico",
+    "cuando pueda", "cuando esté listo", "cuando este listo",
+]
 _POSPAGO = [
     "renta mensual", "plan pospago", "pospago", "postpago", "contrato mensual",
     "plan de renta", "plan con contrato", "factura mensual", "cambiar a pospago",
@@ -145,6 +153,14 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
     """Lógica principal del nodo de validación. Retorna el patch de estado."""
     user_text = getattr(messages[-1], "content", "").strip()
     lower = user_text.lower()
+
+    # Quiere ser contactado después
+    if any(w in lower for w in _SEGUIMIENTO):
+        return {
+            "messages": [AIMessage(content="Perfecto, queda registrado. Un asesor te contactará cuando estés listo.")],
+            "escalate_to_human": True,
+            "motivo_escalacion": "seguimiento",
+        }
 
     # Caso sensible
     if any(w in lower for w in _SENSITIVE_WORDS):
