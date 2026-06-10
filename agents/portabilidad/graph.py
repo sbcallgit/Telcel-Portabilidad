@@ -108,7 +108,7 @@ def _build() -> StateGraph:
         },
     )
 
-    for node_name in ["validacion", "sondeo", "oferta", "objeciones", "escalate", "fin"]:
+    for node_name in ["validacion", "escalate", "fin"]:
         graph.add_edge(node_name, END)
 
     # cierre → escalate cuando los KPIs están completos (mismo turno)
@@ -117,6 +117,17 @@ def _build() -> StateGraph:
         lambda s: "escalate" if s.get("etapa") == "escalado" else END,
         {"escalate": "escalate", END: END},
     )
+
+    # sondeo / oferta / objeciones → escalate en el mismo turno si detectan intent de escalación
+    def _to_escalate_or_end(s: PortabilidadState) -> str:
+        return "escalate" if s.get("escalate_to_human") else END
+
+    for node_name in ["sondeo", "oferta", "objeciones"]:
+        graph.add_conditional_edges(
+            node_name,
+            _to_escalate_or_end,
+            {"escalate": "escalate", END: END},
+        )
 
     return graph
 
