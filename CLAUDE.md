@@ -76,7 +76,8 @@ bot_telcel_portabilidad/
 │   └── migrations.py        # DDL CREATE TABLE para todas las tablas
 │
 ├── jobs/                    # Tareas programadas
-│   └── seguimientos.py      # Cadencia de seguimientos automáticos (APScheduler)
+│   ├── seguimientos.py      # Cadencia de seguimientos automáticos (APScheduler)
+│   └── connector_poll.py    # Polling cada 30s: reenvía mensajes del asesor al usuario
 │
 ├── knowledge/               # Base de conocimiento del bot
 │   ├── seed.py              # Script principal: crea tablas y carga todo
@@ -123,27 +124,34 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `WHATSAPP_TOKEN` | Bearer token para Graph API de Meta |
 | `WHATSAPP_APP_SECRET` | Usado para validar firma HMAC de webhooks |
 | `WHATSAPP_VERIFY_TOKEN` | Token de verificación del webhook (handshake Meta) |
-| `BITRIX_WEBHOOK_URL` | URL del webhook entrante de Bitrix24 |
+| `BITRIX_WEBHOOK_URL` | URL del webhook entrante de Bitrix24 (CRM: crear/mover deals) |
+| `BITRIX_PIPELINE_ID` | ID del pipeline de deals (actualmente `90`) |
+| `BITRIX_STAGE_LISTO` | Stage ID para "Listo para Portabilidad" (ej. `C90:NEW`) |
 | `BITRIX_CLIENT_ID` | Client ID de la app local OAuth de Bitrix24 |
 | `BITRIX_CLIENT_SECRET` | Client Secret de la app local OAuth |
-| `BITRIX_CONNECTOR_LINE_ID` | ID del Open Channel en Bitrix24 |
+| `BITRIX_CONNECTOR_ID` | ID del conector imconnector registrado en el portal (`telegram_ai_agent`) |
+| `BITRIX_CONNECTOR_LINE_ID` | ID del Open Channel en Bitrix24 (actualmente `542`) |
+| `BITRIX_PUBLIC_URL` | URL pública del servidor para el callback OAuth de Bitrix |
 | `ANTHROPIC_API_KEY` | API key de Claude (Anthropic) |
 | `DB_PASSWORD` | Contraseña de PostgreSQL |
 | `REDIS_URL` | URL de conexión a Redis |
-| `DEBOUNCE_WINDOW_MS` | Ventana de debounce en ms (0 = desactivado, default 1500) |
+| `DEBOUNCE_WINDOW_MS` | Ventana de debounce en ms (0 = desactivado, producción: `5000`) |
 | `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram (canal de pruebas) |
+| `TELEGRAM_WEBHOOK_SECRET` | Secret para validar webhooks de Telegram (X-Telegram-Bot-Api-Secret-Token) |
 
 ---
 
-## Pipeline operativo de Bitrix (5 etapas)
+## Pipeline operativo de Bitrix (pipeline ID 90 — deals, no leads)
 
-| Etapa | Significado | Regla automática |
-|---|---|---|
-| Pipeline IA Porta | Lead en manos del bot | 24h sin Venta Exitosa → Recuperación |
-| Listo para Portabilidad | Datos completos, listo para asesor | — |
-| Venta | Solo leads con Venta Exitosa | — |
-| Recuperación | Lead a reactivar | 72h sin Venta Exitosa → Caído |
-| Caído | Lead perdido (con tipificación) | — |
+El pipeline usa `crm.deal.*` con `CATEGORY_ID=90`. Las etapas siguen el formato `C90:*`.
+
+| Etapa | Stage ID | Significado | Regla automática |
+|---|---|---|---|
+| Pipeline IA Porta | `C90:NEW` | Deal en manos del bot | 24h sin Venta Exitosa → Recuperación |
+| Listo para Portabilidad | `C90:PREPARATION` | Datos completos, listo para asesor | — |
+| Venta | `C90:WON` | Solo leads con Venta Exitosa | — |
+| Recuperación | `C90:8` | Lead a reactivar | 72h sin Venta Exitosa → Caído |
+| Caído | `C90:LOSE` | Lead perdido (con tipificación) | — |
 
 ---
 
@@ -236,6 +244,46 @@ Los archivos usan placeholders `{NOMBRE}` que `render_prompt()` (`agents/portabi
 
 ---
 
+## Integración Bitrix24 Open Lines (imconnector)
+
+El espejeo de mensajes usa la API `imconnector` vía OAuth (no el webhook REST básico).
+
+### Flujo bidireccional
+
+```
+Usuario (Telegram/WhatsApp)
+    │  mensaje
+    ▼
+webhook → send_user_message() → imconnector.send.messages → Open Lines 542
+    │
+    ▼  (debounce + agente)
+send_bot_message() → imconnector.send.messages → mismo chat en Open Lines
+    
+Asesor responde en Bitrix Open Lines
+    │
+    ▼  (polling cada 30s — connector_poll.py)
+im.dialog.messages.get → _forward_to_user() → Telegram o WhatsApp
+```
+
+### Claves Redis del conector
+
+| Clave Redis | Contenido |
+|---|---|
+| `connector_ext_chat:{phone}` | external_chat_id para la sesión activa (TTL 24h) |
+| `connector_session:{phone}` | session_id de Open Lines devuelto por Bitrix |
+| `connector_chat:{phone}` | chat_id interno de Bitrix (para im.dialog.messages.get) |
+| `connector_last_msg:{phone}` | cursor: ID del último mensaje procesado del asesor |
+| `connector_delivered:{msg_id}` | deduplicación de mensajes ya reenviados (TTL 24h) |
+
+### Notas críticas de imconnector
+
+- **Auth:** el token OAuth va en el **body JSON** como `"auth": token`, NO como header `Authorization: Bearer`.
+- **Estructura de mensajes:** claves **lowercase** (`user`, `message`, `chat`). Uppercase (`USER`, `MESSAGE`) no funciona.
+- **Conector activo:** `telegram_ai_agent` (ya registrado en el portal b24-ahyle8.bitrix24.mx, activado en línea 542). No usar conectores nuevos — registrar uno nuevo con una app local requiere placement handler de marketplace.
+- **Registro OAuth:** flujo en `GET /bitrix/auth` → Bitrix redirige a `BITRIX_PUBLIC_URL/bitrix/app` → tokens en Redis `bitrix:oauth_tokens`. Re-ejecutar si expira el refresh_token.
+
+---
+
 ## Notas de desarrollo
 
 - **Promos:** configuración versionada en tabla `promos`. Cuando Telcel publique nuevas, actualizar `load_promos.py` y correr `make seed`. NUNCA hardcodear precios en el agente.
@@ -243,4 +291,6 @@ Los archivos usan placeholders `{NOMBRE}` que `render_prompt()` (`agents/portabi
 - **Versiones de prompt:** editar los archivos en `prompts/` directamente. Para historial de versiones usar git. La carpeta `knowledge/prompts/` es para specs de auditoría, no para los prompts activos.
 - **Jobs timezone:** siempre `America/Monterrey` explícito. El horario de portabilidad es L-S 9am–9pm; sin domingos.
 - **Debounce:** configurar `DEBOUNCE_WINDOW_MS` en `.env`. Valor actual en producción: `5000` ms. Poner `0` solo en pruebas unitarias o entornos donde cada mensaje debe procesarse de forma independiente.
-- **Telegram:** canal de pruebas que corre el mismo agente y el mismo debounce que WhatsApp. El `thread_id` de LangGraph es `str(chat_id)` en Telegram y `phone` en WhatsApp.
+- **Telegram:** canal de pruebas que corre el mismo agente y el mismo debounce que WhatsApp. El `thread_id` de LangGraph es `str(chat_id)` en Telegram y `phone` en WhatsApp. El `phone` en Telegram tiene prefijo `tg_` (ej. `tg_8211184685`).
+- **Bitrix deals vs leads:** el pipeline 90 es de **deals** (`crm.deal.*`). No usar `crm.lead.*` — son entidades distintas con etapas distintas.
+- **Connector poll:** `connector_poll.py` corre como `asyncio.Task` en el lifespan de FastAPI (no como job de APScheduler). Intervalo: 30 segundos.
