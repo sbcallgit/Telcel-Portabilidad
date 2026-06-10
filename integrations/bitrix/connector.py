@@ -20,7 +20,8 @@ from integrations.redis_client import get_redis
 logger = logging.getLogger(__name__)
 
 _BITRIX_DOMAIN = "https://b24-ahyle8.bitrix24.mx"
-_SESSION_TTL = 86_400  # 24 h
+_SESSION_TTL = 86_400        # 24 h — sesión imconnector (session_id, chat_id, deal_id)
+_EXT_CHAT_TTL = 90 * 86_400  # 90 días — preserva el vínculo teléfono↔deal entre visitas
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
@@ -66,7 +67,7 @@ async def _get_or_create_external_chat_id(phone: str) -> str:
     if existing:
         return existing
     new_id = f"{phone}_{int(time.time())}"
-    await redis.setex(key, _SESSION_TTL, new_id)
+    await redis.setex(key, _EXT_CHAT_TTL, new_id)
     return new_id
 
 
