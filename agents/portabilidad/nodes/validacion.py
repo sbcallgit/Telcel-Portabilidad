@@ -46,7 +46,6 @@ _ID_Q = [
 _CLARO_DRIVE_Q = ["claro drive", "clarodrive", "almacenamiento en la nube", "guardar fotos",
                   "guardar archivos", "20 gb"]
 _CLARO_MUSICA_Q = ["claro música", "claro musica", "app de música", "app de musica"]
-# Ingeniería social / reclamos de autoridad fuera del flujo normal
 _SOCIAL_ENGINEERING = [
     "amigo del dueño", "amigo del director", "amigo del gerente", "conoce al dueño",
     "conozco al dueño", "conozco al director", "trabajo en telcel", "soy empleado",
@@ -56,7 +55,6 @@ _SOCIAL_ENGINEERING = [
     "tengo una carta", "traigo una autorización especial", "ya hablé con el director",
     "soy socio de telcel", "soy accionista", "me mandó el corporativo",
 ]
-# Ciudades que NO son Región 4
 _FUERA_R4 = ["cancún", "cancun", "mérida", "merida", "guadalajara", "ciudad de méxico",
              "cdmx", "monterrreyyyy"]
 
@@ -75,15 +73,12 @@ def _extract_phone(text: str) -> str | None:
     """
     digits_only = re.sub(r"\D", "", text)
 
-    # Código de país México (+52 o 52)
     if len(digits_only) == 12 and digits_only.startswith("52"):
         return digits_only[2:]
 
-    # Exactamente 10 dígitos en todo el mensaje → es el número
     if len(digits_only) == 10:
         return digits_only
 
-    # Cualquier otra cantidad → no extraer
     return None
 
 
@@ -91,7 +86,6 @@ def _is_phone_attempt(text: str) -> bool:
     """True si el mensaje parece un intento de ingresar un número de teléfono pero con formato incorrecto."""
     digit_count = _count_digits(text)
     non_digit = len(text.strip()) - digit_count
-    # Parece intento de teléfono: 7+ dígitos y pocas letras/caracteres extra
     return digit_count >= 7 and non_digit <= 8
 
 
@@ -122,11 +116,33 @@ def _format_cacs(cacs: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-async def validacion_node(state: PortabilidadState) -> dict:
-    messages = state.get("messages") or []
-    if not messages:
+async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
+    """Crea un deal en Bitrix al primer mensaje si aún no existe (idempotente)."""
+    from config.settings import settings
+    if state.get("bitrix_lead_id") or not settings.bitrix_webhook_url:
         return {}
+    phone = state.get("customer_phone", "")
+    if not phone:
+        return {}
+    try:
+        from integrations.bitrix.client import BitrixClient
+        bx = BitrixClient()
+        result = await bx.crear_deal(
+            telefono=phone,
+            datos={"COMMENTS": "Primer contacto vía WhatsApp/Telegram"},
+            stage_id=settings.bitrix_stage_ia_porta,
+        )
+        deal_id = str(result.get("result", ""))
+        if deal_id:
+            logger.info("bitrix_deal_primer_contacto", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
+            return {"bitrix_lead_id": deal_id, "bitrix_etapa": "ia_porta"}
+    except Exception as exc:
+        logger.error("bitrix_primer_contacto_error", extra={"error": str(exc)})
+    return {}
 
+
+async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
+    """Lógica principal del nodo de validación. Retorna el patch de estado."""
     user_text = getattr(messages[-1], "content", "").strip()
     lower = user_text.lower()
 
@@ -222,7 +238,6 @@ async def validacion_node(state: PortabilidadState) -> dict:
 
     # Pregunta sobre CAC por ciudad
     if any(w in lower for w in _CAC_Q):
-        # Verificar ciudades fuera de R4
         if any(ciudad in lower for ciudad in _FUERA_R4):
             ciudad_mencionada = next((c for c in _FUERA_R4 if c in lower), "esa ciudad")
             return {
@@ -232,7 +247,6 @@ async def validacion_node(state: PortabilidadState) -> dict:
                     "¿Puedo ayudarte con algo más sobre tu portabilidad?"
                 ))]
             }
-        # Intentar buscar en BD por ciudad mencionada
         city_match = re.search(
             r"\b(monterrey|saltillo|reynosa|san pedro|santa catarina|tampico|ciudad valles|"
             r"cd\.?\s*valles|guadalupe|san nicolás|apodaca|linares|nuevo laredo|matamoros|victoria)\b",
@@ -250,7 +264,6 @@ async def validacion_node(state: PortabilidadState) -> dict:
                         "¿Le ayudo con algo más sobre su portabilidad?"
                     ))]
                 }
-        # Sin ciudad específica → pedir la ciudad
         return {
             "messages": [AIMessage(content=(
                 "Claro. ¿En qué municipio o ciudad se encuentra? "
@@ -265,10 +278,8 @@ async def validacion_node(state: PortabilidadState) -> dict:
         lada_info = await _query_lada(lada)
 
         if not lada_info:
-            # LADA no reconocida → podría ser fuera de R4 o LADA no catalogada
             intentos = (state.get("intentos_sin_avance") or 0) + 1
             if intentos >= 2:
-                # Después de 2 intentos sin reconocer la LADA → derivar a asesor
                 return {
                     "messages": [AIMessage(content=(
                         "No encontré tu zona dentro de Región 4. "
@@ -315,11 +326,10 @@ async def validacion_node(state: PortabilidadState) -> dict:
             "etapa": "fin",
         }
 
-    # ── Intento de teléfono con formato incorrecto (determinista, antes de Claude) ──
+    # Intento de teléfono con formato incorrecto
     digit_count = _count_digits(user_text)
     if _is_phone_attempt(user_text):
         digits_only = re.sub(r"\D", "", user_text)
-        # 12 dígitos que NO empiezan con 52 → número de país equivocado
         if len(digits_only) == 12 and not digits_only.startswith("52"):
             return {
                 "messages": [AIMessage(content=(
@@ -328,7 +338,6 @@ async def validacion_node(state: PortabilidadState) -> dict:
                     "¿Me lo compartes de nuevo?"
                 ))]
             }
-        # Más de 12 dígitos o entre 7 y 9 → longitud incorrecta
         return {
             "messages": [AIMessage(content=(
                 f"El número debe tener exactamente 10 dígitos. "
@@ -359,7 +368,6 @@ async def validacion_node(state: PortabilidadState) -> dict:
             reply = "No tengo registrada esa LADA. ¿Me compartes tu número completo de 10 dígitos?"
         return {"messages": [AIMessage(content=reply)]}
 
-    # Disparadores de saludo específicos (sec. 6.2)
     _INFO_TRIGGERS = ["info", "información", "informacion"]
     _INTERESA_TRIGGERS = ["me interesa", "quiero saber", "me intereso"]
     _PRECIO_TRIGGERS = ["cuánto cuesta", "cuanto cuesta", "precio", "cuánto vale", "cuanto vale"]
@@ -451,3 +459,16 @@ async def validacion_node(state: PortabilidadState) -> dict:
 
     ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages))
     return {"messages": split_msg(ai_msg.content)}
+
+
+async def validacion_node(state: PortabilidadState) -> dict:
+    messages = state.get("messages") or []
+    if not messages:
+        return {}
+
+    # Crear deal en Bitrix al primer contacto (no bloquea si falla)
+    deal_update = await _crear_deal_primer_contacto(state)
+
+    # Ejecutar lógica de validación y fusionar con el deal_id recién creado
+    result = await _validacion_logic(state, messages)
+    return {**deal_update, **result}

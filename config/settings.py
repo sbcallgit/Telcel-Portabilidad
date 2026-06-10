@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     bitrix_client_secret: str = ""
     bitrix_connector_id: str = "whatsapp_vera"
     bitrix_connector_line_id: str = ""
+    bitrix_stage_ia_porta: str = "C90:NEW"  # ID de etapa inicial "Pipeline IA Porta"
     bitrix_stage_listo: str = ""  # ID de etapa "Listo para Portabilidad"
     bitrix_public_url: str = "https://portabilidad.callcomcc.io"
 

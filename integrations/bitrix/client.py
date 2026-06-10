@@ -32,14 +32,14 @@ class BitrixClient:
         except httpx.RequestError as exc:
             raise BitrixError("Bitrix network error", retriable=True, original=exc) from exc
 
-    async def crear_deal(self, telefono: str, datos: dict) -> dict:
+    async def crear_deal(self, telefono: str, datos: dict, stage_id: str | None = None) -> dict:
         """Crea un deal en el pipeline de portabilidad (category_id = BITRIX_PIPELINE_ID)."""
         nombre = datos.get("NAME", "")
-        titulo = f"Portabilidad {nombre} - *{telefono[-4:]}" if nombre else f"Portabilidad *{telefono[-4:]}"
+        titulo = f"Portabilidad {nombre} *{telefono[-4:]}" if nombre else f"Portabilidad *{telefono[-4:]}"
         fields = {
             "TITLE": titulo,
             "CATEGORY_ID": settings.bitrix_pipeline_id,
-            "STAGE_ID": settings.bitrix_stage_listo,
+            "STAGE_ID": stage_id or settings.bitrix_stage_listo,
             "COMMENTS": (
                 f"Teléfono: {telefono}\n"
                 + datos.get("COMMENTS", "")
@@ -47,6 +47,13 @@ class BitrixClient:
         }
         result = await self._call("crm.deal.add", {"fields": fields})
         logger.info("bitrix_deal_created", extra={"phone_tail": telefono[-4:]})
+        return result
+
+    async def actualizar_deal(self, deal_id: str, datos: dict) -> dict:
+        """Actualiza título, etapa y comentarios de un deal existente."""
+        fields = {k: v for k, v in datos.items() if v is not None}
+        result = await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
+        logger.info("bitrix_deal_updated", extra={"deal_id": deal_id})
         return result
 
     async def mover_etapa(self, deal_id: str, etapa: str) -> dict:

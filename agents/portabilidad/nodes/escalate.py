@@ -26,31 +26,45 @@ def _build_context(state: PortabilidadState) -> dict:
     }
 
 
-async def _try_bitrix(context: dict, phone: str) -> str:
-    """Crea/actualiza lead en Bitrix24 y devuelve el lead_id. Silencia errores si no configurado."""
+async def _try_bitrix(context: dict, phone: str, existing_deal_id: str = "") -> str:
+    """Actualiza deal existente (o crea si no hay) con KPIs completos. Silencia errores."""
     if not settings.bitrix_webhook_url:
         logger.info("bitrix_skipped_not_configured")
-        return ""
+        return existing_deal_id
+
+    nombre = context.get("nombre", "")
+    titulo = f"Portabilidad {nombre} *{phone[-4:]}" if nombre else f"Portabilidad *{phone[-4:]}"
+    comments = (
+        f"Teléfono: {phone}\n"
+        f"Promo: {context.get('promo_elegida', '')}\n"
+        f"Número a portar: {context.get('numero_a_portar', '')}\n"
+        f"Compañía donante: {context.get('compania_donante', '')}\n"
+        f"Municipio: {context.get('municipio', '')}\n"
+        f"Temperatura: {context.get('temperatura', '')}"
+    )
+
     try:
         from integrations.bitrix.client import BitrixClient
         bx = BitrixClient()
-        result = await bx.crear_deal(
-            telefono=phone,
-            datos={
-                "NAME": context.get("nombre", ""),
-                "COMMENTS": (
-                    f"Promo: {context.get('promo_elegida', '')}\n"
-                    f"Número a portar: {context.get('numero_a_portar', '')}\n"
-                    f"Compañía donante: {context.get('compania_donante', '')}\n"
-                    f"Municipio: {context.get('municipio', '')}\n"
-                    f"Temperatura: {context.get('temperatura', '')}"
-                ),
-            },
-        )
+
+        if existing_deal_id:
+            # Actualizar deal creado al primer contacto con KPIs completos
+            await bx.actualizar_deal(
+                deal_id=existing_deal_id,
+                datos={
+                    "TITLE": titulo,
+                    "STAGE_ID": settings.bitrix_stage_listo,
+                    "COMMENTS": comments,
+                },
+            )
+            return existing_deal_id
+
+        # Fallback: crear deal si no se creó al primer contacto
+        result = await bx.crear_deal(telefono=phone, datos={"NAME": nombre, "COMMENTS": comments})
         return str(result.get("result", ""))
     except Exception as exc:
         logger.error("bitrix_error", extra={"error": str(exc)})
-        return ""
+        return existing_deal_id
 
 
 def _build_handoff_message(context: dict, motivo: str) -> str:
@@ -98,8 +112,8 @@ async def escalate_node(state: PortabilidadState) -> dict:
     phone = state.get("customer_phone") or ""
     motivo = state.get("motivo_escalacion") or "cierre"
 
-    # Integrar con Bitrix (fallos son silenciosos para no bloquear al cliente)
-    deal_id = await _try_bitrix(context, phone)
+    # Actualizar deal existente (creado al primer contacto) con KPIs completos
+    deal_id = await _try_bitrix(context, phone, existing_deal_id=state.get("bitrix_lead_id") or "")
 
     logger.info(
         "escalation_done",
