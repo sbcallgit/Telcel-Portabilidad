@@ -68,20 +68,5 @@ class WhatsAppClient:
             logger.debug("whatsapp_read_receipt_failed", extra={"error": str(exc)})
 
     async def show_typing(self, to: str) -> None:
-        """Muestra el indicador '...escribiendo' al destinatario. Best-effort."""
-        url = f"{_BASE_URL}/{self._phone_id}/messages"
-        try:
-            async with httpx.AsyncClient(timeout=5) as client:
-                await client.post(
-                    url,
-                    json={
-                        "messaging_product": "whatsapp",
-                        "recipient_type": "individual",
-                        "to": to,
-                        "type": "chat_state",
-                        "chat_state": {"status": "active"},
-                    },
-                    headers={"Authorization": f"Bearer {self._token}"},
-                )
-        except Exception as exc:
-            logger.debug("whatsapp_typing_failed", extra={"error": str(exc)})
+        """No-op: WhatsApp Cloud API no soporta typing indicators vía API.
+        El double check azul (mark_as_read) es la señal disponible."""
