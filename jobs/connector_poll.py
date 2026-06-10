@@ -30,40 +30,47 @@ async def _forward_to_user(phone: str, text: str) -> None:
         await _wa.send_message(phone, text)
 
 
-async def _poll_once() -> None:
+async def _poll_phone(phone: str, chat_id: str, redis: object) -> None:
     from integrations.bitrix.connector import poll_asesor_messages
+    try:
+        messages = await poll_asesor_messages(phone, chat_id)
+    except Exception as exc:
+        logger.error("poll_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+        return
+
+    for msg_id, text, author_id in messages:
+        dedup_key = f"connector_delivered:{msg_id}"
+        if await redis.get(dedup_key):  # type: ignore[union-attr]
+            continue
+        try:
+            await _forward_to_user(phone, text)
+            await redis.setex(dedup_key, 86400, "1")  # type: ignore[union-attr]
+            logger.info("asesor_msg_forwarded", extra={
+                "phone_tail": phone[-4:],
+                "msg_id": msg_id,
+                "author_id": author_id,
+            })
+        except Exception as exc:
+            logger.error("forward_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+
+
+async def _poll_once() -> None:
+    import asyncio
 
     redis = await get_redis()
     keys = await redis.keys("connector_chat:*")
     if not keys:
         return
 
+    tasks = []
     for key in keys:
         phone = key.removeprefix("connector_chat:")
         chat_id = await redis.get(f"connector_chat:{phone}")
-        if not chat_id:
-            continue
+        if chat_id:
+            tasks.append(_poll_phone(phone, chat_id, redis))
 
-        try:
-            messages = await poll_asesor_messages(phone, chat_id)
-        except Exception as exc:
-            logger.error("poll_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
-            continue
-
-        for msg_id, text, author_id in messages:
-            dedup_key = f"connector_delivered:{msg_id}"
-            if await redis.get(dedup_key):
-                continue
-            try:
-                await _forward_to_user(phone, text)
-                await redis.setex(dedup_key, 86400, "1")
-                logger.info("asesor_msg_forwarded", extra={
-                    "phone_tail": phone[-4:],
-                    "msg_id": msg_id,
-                    "author_id": author_id,
-                })
-            except Exception as exc:
-                logger.error("forward_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def _poll_loop() -> None:

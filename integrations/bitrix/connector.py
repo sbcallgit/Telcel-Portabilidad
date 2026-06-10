@@ -175,6 +175,17 @@ async def send_bot_message(phone: str, text: str) -> None:
         logger.error("connector_bot_msg_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
 
 
+async def _call_poll(method: str, params: dict) -> dict:
+    """Llamada sin reintentos para operaciones de polling best-effort."""
+    from integrations.bitrix.oauth import get_token
+    token = await get_token()
+    url = f"{_BITRIX_DOMAIN}/rest/{method}"
+    async with httpx.AsyncClient(timeout=20) as client:
+        resp = await client.post(url, json={**params, "auth": token})
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def poll_asesor_messages(phone: str, chat_id: str) -> list[tuple[str, str, int]]:
     """Lee mensajes nuevos del asesor en el chat via im.dialog.messages.get.
 
@@ -185,7 +196,7 @@ async def poll_asesor_messages(phone: str, chat_id: str) -> list[tuple[str, str,
     last_id = int(await redis.get(last_key) or "0")
 
     try:
-        result = await _call("im.dialog.messages.get", {
+        result = await _call_poll("im.dialog.messages.get", {
             "DIALOG_ID": f"chat{chat_id}",
             "LIMIT": 20,
         })
