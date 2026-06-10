@@ -2,7 +2,7 @@
 
 import logging
 
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from agents.llm import get_llm
@@ -32,12 +32,77 @@ logger = logging.getLogger(__name__)
 _agent_graph = None
 
 
+_FIN_ESCALATION = [
+    "asesor", "humano", "persona real", "agente", "supervisor", "hablar con alguien",
+    "quiero hablar", "conéctame", "conectame", "quiero que me llamen",
+]
+_FIN_SEGUIMIENTO = [
+    "más adelante", "mas adelante", "en otro momento", "luego te confirmo",
+    "mañana te digo", "ahorita no puedo", "ahorita no", "llámame después",
+    "llamame despues", "cuando pueda", "después me comunico", "me comunico después",
+]
+_FIN_PROSPECTO = [
+    "ya decidí", "ya decidi", "quiero portarme", "listo para portarme",
+    "ya me decidí", "ya me decidi", "sí quiero", "si quiero", "vamos", "adelante",
+]
+
+
 async def _fin_node(state: PortabilidadState) -> dict:
-    """Post-escalamiento: Vera sigue respondiendo preguntas del cliente con Claude."""
+    """Post-escalamiento: re-detecta intents clave y actualiza Bitrix en consecuencia."""
+    from agents.portabilidad.nodes.escalate import _build_context, _try_bitrix
+
     messages = state.get("messages") or []
+    user_text = getattr(messages[-1], "content", "").strip()
+    lower = user_text.lower()
+    phone = state.get("customer_phone", "")
     datos = state.get("datos_lead") or {}
     promo = state.get("promo_elegida", "")
 
+    # Cliente quiere asesor humano ahora → mover deal a Escalamiento
+    if any(w in lower for w in _FIN_ESCALATION):
+        context = _build_context(state)
+        deal_id = await _try_bitrix(
+            context, phone, motivo="solicitud_directa",
+            existing_deal_id=state.get("bitrix_lead_id") or "",
+        )
+        logger.info("fin_node_reescalado", extra={
+            "phone_tail": phone[-4:] if len(phone) >= 4 else phone,
+            "nuevo_motivo": "solicitud_directa",
+        })
+        return {
+            "messages": [AIMessage(content="Claro, te conecto ahora mismo con un asesor. En unos minutos te contacta.")],
+            "bitrix_lead_id": deal_id,
+        }
+
+    # Cliente confirma seguimiento → deal ya está en Seguimiento, solo confirmar
+    if any(w in lower for w in _FIN_SEGUIMIENTO):
+        return {
+            "messages": [AIMessage(content=(
+                "Perfecto, ya tienes un asesor asignado que te contactará cuando estés listo. "
+                "¡Que tengas excelente día!"
+            ))],
+        }
+
+    # Cliente se decide y quiere avanzar → mover deal a Prospecto
+    if any(w in lower for w in _FIN_PROSPECTO):
+        context = _build_context(state)
+        deal_id = await _try_bitrix(
+            context, phone, motivo="cierre",
+            existing_deal_id=state.get("bitrix_lead_id") or "",
+        )
+        logger.info("fin_node_reescalado", extra={
+            "phone_tail": phone[-4:] if len(phone) >= 4 else phone,
+            "nuevo_motivo": "cierre",
+        })
+        return {
+            "messages": [AIMessage(content=(
+                "¡Perfecto! Te paso con un asesor para coordinar tu portabilidad. "
+                "Te contacta en los próximos minutos."
+            ))],
+            "bitrix_lead_id": deal_id,
+        }
+
+    # Default: Claude responde preguntas post-escalación
     llm = get_llm()
     system = (
         "Eres Vera, asistente de Telcel para portabilidad. "
@@ -55,7 +120,7 @@ async def _fin_node(state: PortabilidadState) -> dict:
         f"{ID_DOCS_INFO}\n"
         f"{HARD_RULES}\n"
         f"{FORMAT_RULES}\n"
-        "TAREA: Responde cualquier pregunta que el cliente tenga de forma natural y completa. "
+        "TAREA: Responde cualquier pregunta del cliente de forma natural. "
         "No repitas que ya lo conectaste con el asesor a menos que sea directamente relevante. "
         "Si pregunta algo fuera del tema de portabilidad/Telcel, redirige brevemente."
     )

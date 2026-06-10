@@ -7,6 +7,7 @@ Permite:
 - Registrar y activar el conector en una línea abierta
 """
 
+import asyncio
 import logging
 import time
 
@@ -88,6 +89,32 @@ async def _get_session(phone: str) -> tuple[str, str]:
     return session_id, chat_id
 
 
+async def _fetch_openlines_deal_async(phone: str) -> None:
+    """Espera 3s y busca el deal creado por Bitrix al abrir la sesión imconnector.
+
+    Bitrix crea el deal de forma asíncrona; guardarlo en Redis antes de que el
+    debounce (5s) dispare evita que validacion_node cree un deal fallback sin vínculo
+    al canal Open Lines.
+    """
+    await asyncio.sleep(3)
+    try:
+        from integrations.bitrix.client import BitrixClient
+        bx = BitrixClient()
+        deal_id = await bx.buscar_deal_por_telefono(phone)
+        if deal_id:
+            redis = await get_redis()
+            await redis.setex(f"connector_deal:{phone}", _SESSION_TTL, deal_id)
+            logger.info("connector_deal_id_saved_async", extra={
+                "phone_tail": phone[-4:],
+                "deal_id": deal_id,
+            })
+    except Exception as exc:
+        logger.warning("connector_deal_id_fetch_failed", extra={
+            "phone_tail": phone[-4:],
+            "error": str(exc),
+        })
+
+
 async def send_user_message(phone: str, text: str) -> str | None:
     """Envía el mensaje del usuario a Bitrix Open Lines via imconnector.
 
@@ -95,6 +122,9 @@ async def send_user_message(phone: str, text: str) -> str | None:
     """
     if not settings.bitrix_client_id or not settings.bitrix_connector_line_id:
         return None
+
+    redis = await get_redis()
+    is_new_session = not await redis.exists(f"connector_ext_chat:{phone}")
 
     external_chat_id = await _get_or_create_external_chat_id(phone)
     ts = int(time.time())
@@ -136,6 +166,13 @@ async def send_user_message(phone: str, text: str) -> str | None:
             "chat_id": chat_id,
             "deal_id": deal_id or "not_in_response",
         })
+
+        # Cuando Bitrix no devuelve CRM_ENTITY_ID en la respuesta, lo crea de forma
+        # asíncrona. Si es una sesión nueva, buscar el deal en background para guardarlo
+        # en Redis antes de que el debounce dispare (5s) y validacion_node lo use.
+        if is_new_session and not deal_id:
+            asyncio.create_task(_fetch_openlines_deal_async(phone))
+
         return session_id or None
 
     except Exception as exc:
