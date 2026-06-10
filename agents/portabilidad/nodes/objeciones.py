@@ -19,6 +19,14 @@ _FRAUD_CLAIM = ["prometió", "descuento especial", "80%", "90%", "gratis"]
 _BUY_WORDS = ["sí", "si ", "quiero", "acepto", "adelante", "ok", "dale", "listo",
               "me convenciste", "está bien", "va", "anótame"]
 _ESCALATION = ["asesor", "humano", "persona real", "agente", "supervisor"]
+_SEGUIMIENTO = [
+    "llámame después", "llamame despues", "llámame mañana", "llamame mañana",
+    "contáctenme", "contactenme", "me contactan", "me llaman", "llámenme", "llamenme",
+    "más adelante", "mas adelante", "en otro momento", "luego te confirmo",
+    "mañana te digo", "ahorita no puedo", "ahorita no", "después me comunico",
+    "me comunico después", "me comunico despues", "ya me comunico",
+    "cuando pueda", "cuando esté listo", "cuando este listo",
+]
 _PRIVACY = ["borra", "elimina", "mis datos", "arco"]
 _POSPAGO = [
     "renta mensual", "plan pospago", "pospago", "postpago", "contrato mensual",
@@ -122,6 +130,14 @@ async def objeciones_node(state: PortabilidadState) -> dict:
             "messages": [AIMessage(content="Claro, te conecto con un asesor. ¿Tu nombre?")],
             "escalate_to_human": True,
             "motivo_escalacion": "solicitud_directa",
+        }
+
+    # Quiere ser contactado después
+    if any(w in lower for w in _SEGUIMIENTO):
+        return {
+            "messages": [AIMessage(content="Perfecto, queda registrado. Un asesor te contactará cuando estés listo.")],
+            "escalate_to_human": True,
+            "motivo_escalacion": "seguimiento",
         }
 
     # Intención de compra → cerrar

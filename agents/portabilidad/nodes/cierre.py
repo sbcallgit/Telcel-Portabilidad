@@ -39,6 +39,14 @@ _LIBERADO_SI = ["sí", "si ", "liberado", "desbloqueado", "sí está", "funciona
 _LIBERADO_NO = ["no", "no sé", "no lo sé", "no estoy seguro", "no sabe", "creo que no", "nunca lo probé"]
 _ESIM = ["esim", "e-sim", "no tiene ranura", "no tiene slot"]
 _ESCALATION = ["asesor", "humano", "persona real", "agente"]
+_SEGUIMIENTO = [
+    "llámame después", "llamame despues", "llámame mañana", "llamame mañana",
+    "contáctenme", "contactenme", "me contactan", "me llaman", "llámenme", "llamenme",
+    "más adelante", "mas adelante", "en otro momento", "luego te confirmo",
+    "mañana te digo", "ahorita no puedo", "ahorita no", "después me comunico",
+    "me comunico después", "me comunico despues", "ya me comunico",
+    "cuando pueda", "cuando esté listo", "cuando este listo",
+]
 
 
 def _extract_phone(text: str) -> str | None:
@@ -89,6 +97,14 @@ async def cierre_node(state: PortabilidadState) -> dict:
             "messages": [AIMessage(content="Claro, lo conecto con un asesor. ¿Su nombre?")],
             "escalate_to_human": True,
             "motivo_escalacion": "solicitud_directa",
+        }
+
+    # Quiere ser contactado después
+    if any(w in lower for w in _SEGUIMIENTO):
+        return {
+            "messages": [AIMessage(content="Perfecto, queda registrado. Un asesor te contactará cuando estés listo.")],
+            "escalate_to_human": True,
+            "motivo_escalacion": "seguimiento",
         }
 
     pending = _next_pending(datos)

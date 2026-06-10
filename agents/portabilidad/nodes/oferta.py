@@ -36,6 +36,14 @@ _OBJECTION_WORDS = [
     "convencerme", "sin convenc", "no me convenció", "sigo sin",
 ]
 _ESCALATION = ["asesor", "humano", "persona", "agente", "supervisor"]
+_SEGUIMIENTO = [
+    "llámame después", "llamame despues", "llámame mañana", "llamame mañana",
+    "contáctenme", "contactenme", "me contactan", "me llaman", "llámenme", "llamenme",
+    "más adelante", "mas adelante", "en otro momento", "luego te confirmo",
+    "mañana te digo", "ahorita no puedo", "ahorita no", "después me comunico",
+    "me comunico después", "me comunico despues", "ya me comunico",
+    "cuando pueda", "cuando esté listo", "cuando este listo",
+]
 _TELCEL_TELCEL = ["ya soy de telcel", "tengo telcel", "soy cliente de telcel", "ya tengo telcel"]
 _TITULARIDAD = ["titularidad", "a nombre de", "cambio de nombre", "transferir la línea"]
 _VOIP = ["twilio", "google voice", "virtual", "voip", "número virtual"]
@@ -175,6 +183,14 @@ async def oferta_node(state: PortabilidadState) -> dict:
             "messages": [AIMessage(content="Claro, lo conecto con un asesor. ¿Su nombre?")],
             "escalate_to_human": True,
             "motivo_escalacion": "solicitud_directa",
+        }
+
+    # Quiere ser contactado después
+    if any(w in lower for w in _SEGUIMIENTO):
+        return {
+            "messages": [AIMessage(content="Perfecto, queda registrado. Un asesor te contactará cuando estés listo.")],
+            "escalate_to_human": True,
+            "motivo_escalacion": "seguimiento",
         }
 
     # Pregunta sobre saldo

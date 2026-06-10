@@ -19,8 +19,11 @@ class Settings(BaseSettings):
     bitrix_client_secret: str = ""
     bitrix_connector_id: str = "whatsapp_vera"
     bitrix_connector_line_id: str = ""
-    bitrix_stage_ia_porta: str = "C90:NEW"  # ID de etapa inicial "Pipeline IA Porta"
-    bitrix_stage_listo: str = ""  # ID de etapa "Listo para Portabilidad"
+    bitrix_stage_ia_porta: str = "C90:NEW"        # Primer contacto — bot activo
+    bitrix_stage_prospecto: str = "C90:PROSPECTO"  # KPIs completos — listo para portabilidad
+    bitrix_stage_seguimiento: str = "C90:SEGUIMIENTO"  # Quiere ser contactado después
+    bitrix_stage_escalamiento: str = "C90:UC_8WB2DT"   # Solicita asesor humano ahora
+    bitrix_stage_listo: str = "C90:PROSPECTO"      # alias de compatibilidad → prospecto
     bitrix_public_url: str = "https://portabilidad.callcomcc.io"
 
     # PostgreSQL

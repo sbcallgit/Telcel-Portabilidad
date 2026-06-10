@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 
 _SENSITIVE = ["mamá", "papá", "murió", "falleció", "muerto", "difunto", "funeral", "accidente"]
 _ESCALATION = ["asesor", "humano", "persona real", "agente", "supervisor", "hablar con alguien"]
+_SEGUIMIENTO = [
+    "llámame después", "llamame despues", "llámame mañana", "llamame mañana",
+    "contáctenme", "contactenme", "me contactan", "me llaman", "llámenme", "llamenme",
+    "más adelante", "mas adelante", "en otro momento", "luego te confirmo",
+    "mañana te digo", "ahorita no puedo", "ahorita no", "después me comunico",
+    "me comunico después", "me comunico despues", "ya me comunico",
+    "cuando pueda", "cuando esté listo", "cuando este listo",
+]
 _FRAUD_OFFER = ["primo", "familiar", "conocido", "compadre"]
 _FRAUD_CLAIM = ["prometió", "descuento especial", "80%", "90%", "gratis me dijeron", "me dijo mi"]
 _POSPAGO = [
@@ -164,6 +172,14 @@ async def sondeo_node(state: PortabilidadState) -> dict:
             "messages": [AIMessage(content="Claro, lo conecto con un asesor. ¿Me dice su nombre?")],
             "escalate_to_human": True,
             "motivo_escalacion": "solicitud_directa",
+        }
+
+    # Quiere ser contactado después
+    if any(w in lower for w in _SEGUIMIENTO):
+        return {
+            "messages": [AIMessage(content="Perfecto, queda registrado. Un asesor te contactará cuando estés listo.")],
+            "escalate_to_human": True,
+            "motivo_escalacion": "seguimiento",
         }
 
     # Intento fraudulento

@@ -26,7 +26,28 @@ def _build_context(state: PortabilidadState) -> dict:
     }
 
 
-async def _try_bitrix(context: dict, phone: str, existing_deal_id: str = "") -> str:
+_ESCALAMIENTO_MOTIVOS = {
+    "solicitud_directa",
+    "caso_sensible",
+    "solicitud_arco",
+    "telcel_a_telcel",
+    "cambio_titularidad",
+}
+_SEGUIMIENTO_MOTIVOS = {
+    "seguimiento",
+    "max_objeciones_alcanzado",
+}
+
+
+def _resolve_stage(motivo: str) -> str:
+    if motivo in _ESCALAMIENTO_MOTIVOS:
+        return settings.bitrix_stage_escalamiento
+    if motivo in _SEGUIMIENTO_MOTIVOS:
+        return settings.bitrix_stage_seguimiento
+    return settings.bitrix_stage_prospecto  # "cierre" y cualquier otro
+
+
+async def _try_bitrix(context: dict, phone: str, motivo: str, existing_deal_id: str = "") -> str:
     """Actualiza deal existente (o crea si no hay) con KPIs completos. Silencia errores."""
     if not settings.bitrix_webhook_url:
         logger.info("bitrix_skipped_not_configured")
@@ -53,14 +74,18 @@ async def _try_bitrix(context: dict, phone: str, existing_deal_id: str = "") -> 
                 deal_id=existing_deal_id,
                 datos={
                     "TITLE": titulo,
-                    "STAGE_ID": settings.bitrix_stage_listo,
+                    "STAGE_ID": _resolve_stage(motivo),
                     "COMMENTS": comments,
                 },
             )
             return existing_deal_id
 
         # Fallback: crear deal si no se creó al primer contacto
-        result = await bx.crear_deal(telefono=phone, datos={"NAME": nombre, "COMMENTS": comments})
+        result = await bx.crear_deal(
+            telefono=phone,
+            datos={"NAME": nombre, "COMMENTS": comments},
+            stage_id=_resolve_stage(motivo),
+        )
         return str(result.get("result", ""))
     except Exception as exc:
         logger.error("bitrix_error", extra={"error": str(exc)})
@@ -77,6 +102,12 @@ def _build_handoff_message(context: dict, motivo: str) -> str:
             "Lamentamos mucho lo que estás pasando. "
             "Te conecto con un asesor que puede orientarte con más calma. "
             "Gracias por tu paciencia."
+        )
+
+    if motivo == "seguimiento":
+        return (
+            "Perfecto, queda registrado. Un asesor de portabilidad te contactará "
+            "cuando estés listo para continuar. ¡Que tengas excelente día!"
         )
 
     if motivo == "solicitud_directa":
@@ -112,8 +143,8 @@ async def escalate_node(state: PortabilidadState) -> dict:
     phone = state.get("customer_phone") or ""
     motivo = state.get("motivo_escalacion") or "cierre"
 
-    # Actualizar deal existente (creado al primer contacto) con KPIs completos
-    deal_id = await _try_bitrix(context, phone, existing_deal_id=state.get("bitrix_lead_id") or "")
+    # Actualizar deal existente (creado al primer contacto) con stage según motivo
+    deal_id = await _try_bitrix(context, phone, motivo=motivo, existing_deal_id=state.get("bitrix_lead_id") or "")
 
     logger.info(
         "escalation_done",
