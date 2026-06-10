@@ -101,8 +101,6 @@ async def escalate_node(state: PortabilidadState) -> dict:
     # Integrar con Bitrix (fallos son silenciosos para no bloquear al cliente)
     deal_id = await _try_bitrix(context, phone)
 
-    handoff_msg = _build_handoff_message(context, motivo)
-
     logger.info(
         "escalation_done",
         extra={
@@ -112,10 +110,17 @@ async def escalate_node(state: PortabilidadState) -> dict:
         },
     )
 
-    return {
-        "messages": [AIMessage(content=handoff_msg)],
+    base = {
         "bitrix_lead_id": deal_id,
         "bitrix_etapa": "listo_para_portabilidad",
         "etapa": "fin",
         "escalate_to_human": False,
     }
+
+    # Cuando viene encadenado desde cierre_node, ese nodo ya envió el resumen con los datos.
+    # Solo agregar mensaje en escalaciones directas (solicitud_directa, caso_sensible, etc.)
+    if motivo == "cierre":
+        return base
+
+    handoff_msg = _build_handoff_message(context, motivo)
+    return {**base, "messages": [AIMessage(content=handoff_msg)]}

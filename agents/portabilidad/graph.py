@@ -105,8 +105,15 @@ def _build() -> StateGraph:
         },
     )
 
-    for node_name in ["validacion", "sondeo", "oferta", "objeciones", "cierre", "escalate", "fin"]:
+    for node_name in ["validacion", "sondeo", "oferta", "objeciones", "escalate", "fin"]:
         graph.add_edge(node_name, END)
+
+    # cierre → escalate cuando los KPIs están completos (mismo turno, sin esperar otro mensaje)
+    graph.add_conditional_edges(
+        "cierre",
+        lambda s: "escalate" if s.get("etapa") == "escalado" else END,
+        {"escalate": "escalate", END: END},
+    )
 
     return graph
 
