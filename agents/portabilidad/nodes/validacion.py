@@ -125,7 +125,8 @@ def _format_cacs(cacs: list[dict]) -> str:
 
 
 async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
-    """Crea un deal en Bitrix al primer mensaje si aún no existe (idempotente)."""
+    """Asocia el deal de Bitrix al primer mensaje: busca el deal existente (creado por el
+    imconnector al abrir el chat) y solo crea uno nuevo si no se encuentra ninguno."""
     from config.settings import settings
     if state.get("bitrix_lead_id") or not settings.bitrix_webhook_url:
         return {}
@@ -135,14 +136,21 @@ async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
     try:
         from integrations.bitrix.client import BitrixClient
         bx = BitrixClient()
-        result = await bx.crear_deal(
-            telefono=phone,
-            datos={"COMMENTS": "Primer contacto vía WhatsApp/Telegram"},
-            stage_id=settings.bitrix_stage_ia_porta,
-        )
-        deal_id = str(result.get("result", ""))
+
+        # Buscar deal existente creado por el imconnector al abrir el chat
+        deal_id = await bx.buscar_deal_por_telefono(phone)
+
+        if not deal_id:
+            # Fallback: crear deal si Bitrix no lo creó automáticamente
+            result = await bx.crear_deal(
+                telefono=phone,
+                datos={"COMMENTS": "Primer contacto vía WhatsApp/Telegram"},
+                stage_id=settings.bitrix_stage_ia_porta,
+            )
+            deal_id = str(result.get("result", ""))
+            logger.info("bitrix_deal_creado_fallback", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
+
         if deal_id:
-            logger.info("bitrix_deal_primer_contacto", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
             return {"bitrix_lead_id": deal_id, "bitrix_etapa": "ia_porta"}
     except Exception as exc:
         logger.error("bitrix_primer_contacto_error", extra={"error": str(exc)})

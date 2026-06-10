@@ -132,7 +132,6 @@ async def sondeo_node(state: PortabilidadState) -> dict:
     datos = dict(state.get("datos_lead") or {})
     user_text = getattr(messages[-1], "content", "").strip()
     lower = user_text.lower()
-
     # Caso sensible
     if any(w in lower for w in _SENSITIVE):
         return {

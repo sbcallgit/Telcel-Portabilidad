@@ -32,6 +32,22 @@ class BitrixClient:
         except httpx.RequestError as exc:
             raise BitrixError("Bitrix network error", retriable=True, original=exc) from exc
 
+    async def buscar_deal_por_telefono(self, telefono: str) -> str:
+        """Busca el deal más reciente en pipeline 90 cuyo título contiene los últimos 4 dígitos del teléfono."""
+        tail = telefono[-4:]
+        result = await self._call("crm.deal.list", {
+            "filter": {"CATEGORY_ID": settings.bitrix_pipeline_id, "%TITLE": f"*{tail}"},
+            "order": {"DATE_CREATE": "DESC"},
+            "select": ["ID", "STAGE_ID", "TITLE"],
+            "start": 0,
+        })
+        items = result.get("result", [])
+        if items:
+            deal_id = str(items[0]["ID"])
+            logger.info("bitrix_deal_encontrado", extra={"phone_tail": tail, "deal_id": deal_id})
+            return deal_id
+        return ""
+
     async def crear_deal(self, telefono: str, datos: dict, stage_id: str | None = None) -> dict:
         """Crea un deal en el pipeline de portabilidad (category_id = BITRIX_PIPELINE_ID)."""
         nombre = datos.get("NAME", "")
