@@ -13,8 +13,10 @@
 |---|---|---|
 | API | FastAPI + Python 3.12 | Webhook de WhatsApp, endpoints de control |
 | Agente | LangGraph + Claude (Anthropic) | Orquestación del flujo de venta |
-| Base de datos | PostgreSQL 16 | Leads, conversaciones, base de conocimiento |
+| Base de datos | PostgreSQL 16 | Leads, conversaciones, base de conocimiento, checkpoints |
 | Caché / Cola | Redis 7 + arq | Contexto de sesión y cola de mensajes |
+| Memoria conversacional | `langgraph-checkpoint-postgres` + `psycopg` | Checkpoints persistentes del agente (sobrevive reinicios) |
+| Memoria semántica | Qdrant + fastembed | RAG vectorial para objeciones (modelo multilingüe local) |
 | Jobs | APScheduler | Seguimientos automáticos |
 | CRM | Bitrix24 | Pipeline operativo y tipificaciones |
 | Escalamiento | Bitrix24 Open Lines | Handoff al asesor humano (imconnector) |
@@ -55,14 +57,16 @@ bot_telcel_portabilidad/
 │   │   ├── client.py        # WhatsAppClient.send_message() — httpx + tenacity
 │   │   └── handlers.py      # verify_webhook_signature() — HMAC-SHA256
 │   ├── bitrix/
-│   │   ├── client.py        # BitrixClient — webhook REST (crear lead, mover etapa)
+│   │   ├── client.py        # BitrixClient — crear_deal(), actualizar_deal(), mover etapa
 │   │   ├── oauth.py         # OAuth tokens — exchange, refresh, Redis-backed
 │   │   └── connector.py     # imconnector API — mirror de mensajes en Open Lines
 │   ├── telegram/
 │   │   ├── client.py        # TelegramClient.send_message()
 │   │   └── handlers.py      # parse_update() — extrae chat_id, text, phone
-│   └── postgres/
-│       └── client.py        # Pool asyncpg — execute/fetch/fetchrow parametrizados
+│   ├── postgres/
+│   │   └── client.py        # Pool asyncpg — execute/fetch/fetchrow parametrizados
+│   └── qdrant/
+│       └── client.py        # RAG semántico — index_objeciones(), search_objection()
 │
 ├── api/                     # Endpoints HTTP
 │   ├── main.py              # App FastAPI — lifespan, middleware de logging
@@ -126,7 +130,8 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `WHATSAPP_VERIFY_TOKEN` | Token de verificación del webhook (handshake Meta) |
 | `BITRIX_WEBHOOK_URL` | URL del webhook entrante de Bitrix24 (CRM: crear/mover deals) |
 | `BITRIX_PIPELINE_ID` | ID del pipeline de deals (actualmente `90`) |
-| `BITRIX_STAGE_LISTO` | Stage ID para "Listo para Portabilidad" (ej. `C90:NEW`) |
+| `BITRIX_STAGE_IA_PORTA` | Stage ID inicial al crear deal en primer contacto (actualmente `C90:NEW`) |
+| `BITRIX_STAGE_LISTO` | Stage ID para "Listo para Portabilidad" (actualmente `C90:UC_4HW32Y`) |
 | `BITRIX_CLIENT_ID` | Client ID de la app local OAuth de Bitrix24 |
 | `BITRIX_CLIENT_SECRET` | Client Secret de la app local OAuth |
 | `BITRIX_CONNECTOR_ID` | ID del conector imconnector registrado en el portal (`telegram_ai_agent`) |
@@ -138,6 +143,9 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `DEBOUNCE_WINDOW_MS` | Ventana de debounce en ms (0 = desactivado, producción: `5000`) |
 | `TELEGRAM_BOT_TOKEN` | Token del bot de Telegram (canal de pruebas) |
 | `TELEGRAM_WEBHOOK_SECRET` | Secret para validar webhooks de Telegram (X-Telegram-Bot-Api-Secret-Token) |
+| `QDRANT_URL` | URL del servidor Qdrant (default: `http://qdrant:6333`) |
+| `QDRANT_API_KEY` | API key de Qdrant (obligatoria en producción) |
+| `QDRANT_EMBEDDING_MODEL` | Modelo fastembed local (default: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`) |
 
 ---
 
@@ -145,13 +153,15 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 
 El pipeline usa `crm.deal.*` con `CATEGORY_ID=90`. Las etapas siguen el formato `C90:*`.
 
-| Etapa | Stage ID | Significado | Regla automática |
+| Etapa | Stage ID | Significado | Cuándo se asigna |
 |---|---|---|---|
-| Pipeline IA Porta | `C90:NEW` | Deal en manos del bot | 24h sin Venta Exitosa → Recuperación |
-| Listo para Portabilidad | `C90:PREPARATION` | Datos completos, listo para asesor | — |
-| Venta | `C90:WON` | Solo leads con Venta Exitosa | — |
-| Recuperación | `C90:8` | Lead a reactivar | 72h sin Venta Exitosa → Caído |
-| Caído | `C90:LOSE` | Lead perdido (con tipificación) | — |
+| Lead Nuevo / IA Porta | `C90:NEW` | Deal en manos del bot | Al primer mensaje del usuario (`validacion_node`) |
+| En Seguimiento | `C90:UC_4HW32Y` | Datos completos, listo para asesor | Al completar el cierre (`escalate_node`) |
+| Venta | `C90:WON` | Solo leads con Venta Exitosa | Manual por el asesor |
+| Recuperación | `C90:8` | Lead a reactivar | Regla automática Bitrix (24h sin avance) |
+| Caído | `C90:LOSE` | Lead perdido (con tipificación) | Manual por el asesor |
+
+**Nota importante:** El deal se crea al primer contacto en `validacion_node` (stage `C90:NEW`). En `escalate_node` se actualiza el mismo deal con nombre, comentarios y stage `C90:UC_4HW32Y`. Nunca se crean dos deals para el mismo usuario.
 
 ---
 
@@ -200,7 +210,7 @@ WhatsApp / Telegram (lead Meta Ads)
         ↓
 [oferta] → promo correcta según recarga (de tabla promos)
         ↓
-[objeciones] → RAG en tabla objeciones (max 3 rebates)
+[objeciones] → RAG semántico en Qdrant (max 3 rebates, fallback a PostgreSQL)
         ↓
 [cierre] → captura nombre, número a portar, compañía donante, municipio
         ↓
@@ -281,6 +291,29 @@ im.dialog.messages.get → _forward_to_user() → Telegram o WhatsApp
 - **Estructura de mensajes:** claves **lowercase** (`user`, `message`, `chat`). Uppercase (`USER`, `MESSAGE`) no funciona.
 - **Conector activo:** `telegram_ai_agent` (ya registrado en el portal b24-ahyle8.bitrix24.mx, activado en línea 542). No usar conectores nuevos — registrar uno nuevo con una app local requiere placement handler de marketplace.
 - **Registro OAuth:** flujo en `GET /bitrix/auth` → Bitrix redirige a `BITRIX_PUBLIC_URL/bitrix/app` → tokens en Redis `bitrix:oauth_tokens`. Re-ejecutar si expira el refresh_token.
+- **Polling concurrente:** `_poll_once` procesa todos los teléfonos activos en paralelo con `asyncio.gather`. El polling usa `_call_poll` (sin reintentos, timeout 20s) para no bloquear el ciclo si Bitrix tarda.
+
+---
+
+## Memoria conversacional y semántica
+
+### Memoria conversacional (PostgreSQL checkpointer)
+
+El agente usa `AsyncPostgresSaver` de `langgraph-checkpoint-postgres` como checkpointer. El estado completo de cada conversación se persiste en 4 tablas de PostgreSQL (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) y sobrevive reinicios del contenedor.
+
+- **Thread ID:** `phone` en WhatsApp, `str(chat_id)` en Telegram
+- **Inicialización:** en el lifespan de FastAPI (`api/main.py`). Fallback a `MemorySaver` si PostgreSQL falla al arrancar.
+- **Setup automático:** `checkpointer.setup()` crea las tablas si no existen en cada arranque.
+
+### Memoria semántica (Qdrant RAG)
+
+El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud semántica.
+
+- **Colección:** `objeciones` — 20 vectores indexados con modelo multilingüe local
+- **Modelo:** `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (fastembed, descarga automática en `make seed`)
+- **Score threshold:** `0.4` — resultados por debajo se descartan y usan fallback PostgreSQL
+- **Indexación:** al final de `load_objeciones.py` → correr `make seed` para re-indexar
+- **Dashboard:** `qdrant-portabilidad.callcomcc.io` — usuario `admin`, contraseña en `.env`
 
 ---
 
@@ -293,4 +326,5 @@ im.dialog.messages.get → _forward_to_user() → Telegram o WhatsApp
 - **Debounce:** configurar `DEBOUNCE_WINDOW_MS` en `.env`. Valor actual en producción: `5000` ms. Poner `0` solo en pruebas unitarias o entornos donde cada mensaje debe procesarse de forma independiente.
 - **Telegram:** canal de pruebas que corre el mismo agente y el mismo debounce que WhatsApp. El `thread_id` de LangGraph es `str(chat_id)` en Telegram y `phone` en WhatsApp. El `phone` en Telegram tiene prefijo `tg_` (ej. `tg_8211184685`).
 - **Bitrix deals vs leads:** el pipeline 90 es de **deals** (`crm.deal.*`). No usar `crm.lead.*` — son entidades distintas con etapas distintas.
-- **Connector poll:** `connector_poll.py` corre como `asyncio.Task` en el lifespan de FastAPI (no como job de APScheduler). Intervalo: 30 segundos.
+- **Connector poll:** `connector_poll.py` corre como `asyncio.Task` en el lifespan de FastAPI (no como job de APScheduler). Intervalo: 30 segundos. Procesamiento concurrente con `asyncio.gather`.
+- **Deal en primer contacto:** `validacion_node` crea el deal en Bitrix al primer mensaje si no existe uno previo. `escalate_node` lo actualiza (no crea uno nuevo). El `bitrix_lead_id` se guarda en el estado del agente.
