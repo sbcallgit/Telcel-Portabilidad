@@ -183,10 +183,9 @@ async def send_user_message(phone: str, text: str) -> str | None:
 async def send_bot_message(phone: str, text: str) -> None:
     """Espeja la respuesta de Vera en el chat de Open Lines vía imconnector.
 
-    Usa el mismo external_chat_id que los mensajes del usuario para que aparezca
-    en la misma conversación, pero con usuario "🤖 Vera" para distinguirlo.
-    Los mensajes enviados vía imconnector tienen CONNECTOR_MID → el poll los filtra
-    y no los reenvía a WhatsApp.
+    Usa el MISMO user.id que el usuario real para que el mensaje quede en la
+    misma sesión de Open Lines y no genere un segundo deal. El prefijo "🤖 Vera |"
+    distingue visualmente las respuestas del bot en el chat del asesor.
     """
     if not settings.bitrix_client_id or not settings.bitrix_connector_line_id:
         return
@@ -203,13 +202,14 @@ async def send_bot_message(phone: str, text: str) -> None:
             "LINE": settings.bitrix_connector_line_id,
             "MESSAGES": [{
                 "user": {
-                    "id": f"bot_{phone}",
-                    "name": "🤖 Vera",
+                    "id": phone,
+                    "name": f"WhatsApp *{phone[-4:]}",
+                    "phone": phone,
                 },
                 "message": {
                     "id": f"bot_{phone}_{ts}",
                     "date": ts,
-                    "text": text,
+                    "text": f"🤖 Vera | {text}",
                 },
                 "chat": {
                     "id": ext_chat_id,
