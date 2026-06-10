@@ -1,13 +1,12 @@
 """Cliente para la API imconnector de Bitrix24.
 
 Permite:
-- Espejear mensajes del usuario (WhatsApp → Bitrix Open Lines)
-- Espejear respuestas del bot (Vera → Bitrix Open Lines, mismo CHAT.ID)
-- Registrar y configurar el conector personalizado
-- Suscribir el evento ONIMCONNECTORMESSAGEADD para recibir mensajes del asesor
+- Espejear mensajes del usuario (WhatsApp/Telegram → Bitrix Open Lines)
+- Espejear respuestas de Vera (bot → Bitrix Open Lines, mismo chat)
+- Recibir mensajes del asesor via polling
+- Registrar y activar el conector en una línea abierta
 """
 
-import json
 import logging
 import time
 
@@ -21,19 +20,30 @@ from integrations.redis_client import get_redis
 logger = logging.getLogger(__name__)
 
 _BITRIX_DOMAIN = "https://b24-ahyle8.bitrix24.mx"
+_SESSION_TTL = 86_400  # 24 h
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8), reraise=True)
 async def _call(method: str, params: dict) -> dict:
-    """Llamada autenticada a la REST API de Bitrix24 vía OAuth."""
+    """Llamada autenticada a la REST API de Bitrix24.
+
+    El token se pasa en el body JSON como 'auth' (no como Bearer header) —
+    es el formato que requiere imconnector.send.messages.
+    """
     from integrations.bitrix.oauth import get_token
     token = await get_token()
     url = f"{_BITRIX_DOMAIN}/rest/{method}"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(url, json=params, headers={"Authorization": f"Bearer {token}"})
+            resp = await client.post(url, json={**params, "auth": token})
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            if error := data.get("error"):
+                raise BitrixError(
+                    f"{method} error [{error}]: {data.get('error_description', '')}",
+                    retriable=False,
+                )
+            return data
     except httpx.HTTPStatusError as exc:
         raise BitrixError(
             f"Bitrix connector error {exc.response.status_code}",
@@ -44,120 +54,202 @@ async def _call(method: str, params: dict) -> dict:
         raise BitrixError("Bitrix network error", retriable=True, original=exc) from exc
 
 
-async def _get_session(phone: str) -> str:
-    """Devuelve el external_chat_id activo para el teléfono, o cadena vacía si no existe."""
+async def _get_or_create_external_chat_id(phone: str) -> str:
+    """Devuelve el external_chat_id activo para el teléfono.
+
+    Si no existe (nueva conversación) genera uno nuevo con timestamp para
+    que Bitrix cree una sesión y un deal vinculado al canal.
+    """
     redis = await get_redis()
-    return await redis.get(f"connector_session:{phone}") or ""
+    key = f"connector_ext_chat:{phone}"
+    existing = await redis.get(key)
+    if existing:
+        return existing
+    new_id = f"{phone}_{int(time.time())}"
+    await redis.setex(key, _SESSION_TTL, new_id)
+    return new_id
 
 
-async def _save_session(phone: str, external_chat_id: str, bitrix_chat_id: str) -> None:
-    """Persiste el external_chat_id y el CHAT.ID interno de Bitrix en Redis."""
+async def _save_session(phone: str, session_id: str, chat_id: str) -> None:
     redis = await get_redis()
-    # Sin TTL — la sesión dura mientras no se reinicie explícitamente
-    await redis.set(f"connector_session:{phone}", external_chat_id)
-    if bitrix_chat_id:
-        await redis.set(f"connector_chat:{phone}", bitrix_chat_id)
+    await redis.setex(f"connector_session:{phone}", _SESSION_TTL, session_id)
+    if chat_id:
+        await redis.setex(f"connector_chat:{phone}", _SESSION_TTL, chat_id)
 
 
-async def send_user_message(phone: str, text: str) -> None:
-    """Envía el mensaje del usuario a Bitrix Open Lines.
+async def _get_session(phone: str) -> tuple[str, str]:
+    """Retorna (session_id, chat_id) almacenados, o ('', '') si no existen."""
+    redis = await get_redis()
+    session_id = await redis.get(f"connector_session:{phone}") or ""
+    chat_id = await redis.get(f"connector_chat:{phone}") or ""
+    return session_id, chat_id
 
-    Si no existe sesión activa, crea una nueva. El CHAT.ID retornado por Bitrix
-    se guarda en Redis para reutilizarlo en send_bot_message.
+
+async def send_user_message(phone: str, text: str) -> str | None:
+    """Envía el mensaje del usuario a Bitrix Open Lines via imconnector.
+
+    Retorna el session_id de Open Lines para poder espejear la respuesta del agente.
     """
     if not settings.bitrix_client_id or not settings.bitrix_connector_line_id:
-        return
+        return None
 
-    external_chat_id = await _get_session(phone)
-    if not external_chat_id:
-        external_chat_id = f"wa_{phone}_{int(time.time())}"
-
+    external_chat_id = await _get_or_create_external_chat_id(phone)
     ts = int(time.time())
-    params = {
-        "CONNECTOR": settings.bitrix_connector_id,
-        "LINE": settings.bitrix_connector_line_id,
-        "MESSAGES": [
-            {
-                "CONNECTOR_MID": f"wa_{phone}_{ts}",
-                "TIMESTAMP": ts,
-                "TEXT": text,
-                "USER": {
-                    "ID": phone,
-                    "NAME": f"WhatsApp *{phone[-4:]}",
-                    "AVATAR": "",
-                },
-                "CHAT": {"ID": external_chat_id},
-            }
-        ],
-    }
 
     try:
-        result = await _call("imconnector.send.messages", params)
-        # Bitrix devuelve el CHAT.ID interno en result["result"]["CHAT"]["ID"]
-        bitrix_chat_id = ""
-        try:
-            bitrix_chat_id = str(result["result"]["CHAT"]["ID"])
-        except (KeyError, TypeError):
-            pass
-        await _save_session(phone, external_chat_id, bitrix_chat_id)
-        logger.info("connector_user_msg_sent", extra={"phone_tail": phone[-4:], "chat_id": external_chat_id})
+        result = await _call("imconnector.send.messages", {
+            "CONNECTOR": settings.bitrix_connector_id,
+            "LINE": settings.bitrix_connector_line_id,
+            "MESSAGES": [{
+                "user": {
+                    "id": phone,
+                    "name": f"WhatsApp *{phone[-4:]}",
+                    "phone": phone,
+                },
+                "message": {
+                    "id": f"wa_{phone}_{ts}",
+                    "date": ts,
+                    "text": text,
+                },
+                "chat": {
+                    "id": external_chat_id,
+                    "name": f"WA {phone}",
+                },
+            }],
+        })
+
+        items = result.get("result", {}).get("DATA", {}).get("RESULT", [])
+        session_data = items[0].get("session", {}) if items else {}
+        session_id = str(session_data.get("ID", ""))
+        chat_id = str(session_data.get("CHAT_ID", ""))
+
+        if session_id:
+            await _save_session(phone, session_id, chat_id)
+
+        logger.info("connector_user_msg_sent", extra={
+            "phone_tail": phone[-4:],
+            "session_id": session_id,
+            "chat_id": chat_id,
+        })
+        return session_id or None
+
     except Exception as exc:
         logger.error("connector_user_msg_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+        return None
 
 
 async def send_bot_message(phone: str, text: str) -> None:
-    """Espeja la respuesta de Vera en la misma sesión de Open Lines del usuario.
+    """Espeja la respuesta de Vera en el chat de Open Lines.
 
-    Usa el mismo CHAT.ID que send_user_message para evitar crear un deal duplicado.
-    Falla silenciosamente si no hay sesión activa (el mensaje del usuario no se procesó antes).
+    Usa el mismo external_chat_id del usuario para mantener la sesión.
+    El prefijo 🤖 distingue visualmente las respuestas automáticas.
     """
     if not settings.bitrix_client_id or not settings.bitrix_connector_line_id:
         return
 
-    external_chat_id = await _get_session(phone)
-    if not external_chat_id:
-        return  # Sin sesión activa, no hay dónde espejear
-
+    external_chat_id = await _get_or_create_external_chat_id(phone)
     ts = int(time.time())
-    params = {
-        "CONNECTOR": settings.bitrix_connector_id,
-        "LINE": settings.bitrix_connector_line_id,
-        "MESSAGES": [
-            {
-                "CONNECTOR_MID": f"vera_{phone}_{ts}",
-                "TIMESTAMP": ts,
-                "TEXT": text,
-                "USER": {
-                    "ID": "vera_bot",
-                    "NAME": "Vera (Bot)",
-                    "AVATAR": "",
-                },
-                "CHAT": {"ID": external_chat_id},
-            }
-        ],
-    }
 
     try:
-        await _call("imconnector.send.messages", params)
+        await _call("imconnector.send.messages", {
+            "CONNECTOR": settings.bitrix_connector_id,
+            "LINE": settings.bitrix_connector_line_id,
+            "MESSAGES": [{
+                "user": {
+                    "id": phone,
+                    "name": f"WhatsApp *{phone[-4:]}",
+                    "phone": phone,
+                },
+                "message": {
+                    "id": f"vera_{phone}_{ts}",
+                    "date": ts,
+                    "text": f"🤖 {text}",
+                },
+                "chat": {
+                    "id": external_chat_id,
+                },
+            }],
+        })
         logger.info("connector_bot_msg_sent", extra={"phone_tail": phone[-4:]})
     except Exception as exc:
         logger.error("connector_bot_msg_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
 
 
-async def register_connector() -> bool:
-    """Registra el conector personalizado en Bitrix24."""
+async def poll_asesor_messages(phone: str, chat_id: str) -> list[tuple[str, str, int]]:
+    """Lee mensajes nuevos del asesor en el chat via im.dialog.messages.get.
+
+    Retorna lista de (msg_id, text, author_id) no vistos aún.
+    """
+    redis = await get_redis()
+    last_key = f"connector_last_msg:{phone}"
+    last_id = int(await redis.get(last_key) or "0")
+
     try:
-        result = await _call(
-            "imconnector.register",
-            {
-                "ID": settings.bitrix_connector_id,
-                "NAME": "WhatsApp Vera Bot",
-                "ICON": {
-                    "DATA_IMAGE": "",
-                    "COLOR": "#25D366",
-                },
-            },
-        )
+        result = await _call("im.dialog.messages.get", {
+            "DIALOG_ID": f"chat{chat_id}",
+            "LIMIT": 20,
+        })
+        messages = result.get("result", {}).get("messages", [])
+
+        # Primera vez: sembrar el puntero sin reenviar histórico
+        if last_id == 0 and messages:
+            max_existing = max(int(m.get("id", 0)) for m in messages)
+            await redis.setex(last_key, _SESSION_TTL, str(max_existing))
+            return []
+
+        new_items: list[tuple[str, str, int]] = []
+        max_id = last_id
+
+        for msg in reversed(messages):
+            msg_id = int(msg.get("id", 0))
+            if msg_id <= last_id:
+                continue
+            if msg_id > max_id:
+                max_id = msg_id
+
+            author_id = msg.get("author_id", 0)
+            params = msg.get("params", {})
+
+            if author_id == 0:
+                continue
+            # Saltar mensajes del cliente (tienen CONNECTOR_MID)
+            if isinstance(params, dict) and params.get("CONNECTOR_MID"):
+                continue
+
+            text = (msg.get("text") or "").strip()
+            if text:
+                new_items.append((str(msg_id), text, int(author_id)))
+
+        if max_id > last_id:
+            await redis.setex(last_key, _SESSION_TTL, str(max_id))
+
+        return new_items
+    except Exception as exc:
+        logger.error("connector_poll_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+        return []
+
+
+async def get_all_active_chats() -> list[tuple[str, str]]:
+    """Retorna lista de (phone, chat_id) para todos los chats activos."""
+    redis = await get_redis()
+    keys = await redis.keys("connector_chat:*")
+    result = []
+    for key in keys:
+        phone = key.replace("connector_chat:", "")
+        chat_id = await redis.get(key)
+        if chat_id:
+            result.append((phone, chat_id))
+    return result
+
+
+async def register_connector() -> bool:
+    """Registra el conector en Bitrix24."""
+    try:
+        result = await _call("imconnector.register", {
+            "ID": settings.bitrix_connector_id,
+            "NAME": "WhatsApp Vera Bot",
+            "ICON": {"COLOR": "#25D366"},
+        })
         return bool(result.get("result"))
     except Exception as exc:
         logger.error("connector_register_error", extra={"error": str(exc)})
@@ -167,51 +259,28 @@ async def register_connector() -> bool:
 async def activate_line(line_id: str) -> bool:
     """Activa el conector en un Open Channel."""
     try:
-        result = await _call(
-            "imconnector.activate",
-            {"CONNECTOR": settings.bitrix_connector_id, "LINE": line_id, "ACTIVE": True},
-        )
+        result = await _call("imconnector.activate", {
+            "CONNECTOR": settings.bitrix_connector_id,
+            "LINE": line_id,
+            "ACTIVE": True,
+        })
         return bool(result.get("result"))
     except Exception as exc:
         logger.error("connector_activate_error", extra={"error": str(exc)})
         return False
 
 
-async def set_connector_data() -> bool:
-    """Configura los datos del conector (nombre visible, URL, etc.)."""
-    try:
-        result = await _call(
-            "imconnector.set.connector.data",
-            {
-                "CONNECTOR": settings.bitrix_connector_id,
-                "LINE": settings.bitrix_connector_line_id,
-                "DATA": {
-                    "TITLE": "WhatsApp Vera Bot",
-                    "LINK": settings.bitrix_public_url,
-                },
-            },
-        )
-        return bool(result.get("result"))
-    except Exception as exc:
-        logger.error("connector_set_data_error", extra={"error": str(exc)})
-        return False
-
-
 async def subscribe_event(handler_url: str) -> bool:
     """Suscribe el evento ONIMCONNECTORMESSAGEADD al endpoint del servidor."""
     try:
-        result = await _call(
-            "event.bind",
-            {
-                "event": "ONIMCONNECTORMESSAGEADD",
-                "handler": handler_url,
-            },
-        )
+        result = await _call("event.bind", {
+            "event": "ONIMCONNECTORMESSAGEADD",
+            "handler": handler_url,
+        })
         return bool(result.get("result"))
     except Exception as exc:
         error_msg = str(exc)
-        if "already binded" in error_msg.lower() or "handler already" in error_msg.lower():
-            logger.info("connector_event_already_bound")
+        if "already" in error_msg.lower():
             return True
         logger.error("connector_subscribe_error", extra={"error": error_msg})
         return False
@@ -220,37 +289,20 @@ async def subscribe_event(handler_url: str) -> bool:
 async def get_connector_status() -> dict:
     """Verifica el estado del conector."""
     try:
-        return await _call(
-            "imconnector.status",
-            {
-                "CONNECTOR": settings.bitrix_connector_id,
-                "LINE": settings.bitrix_connector_line_id,
-            },
-        )
+        return await _call("imconnector.status", {
+            "CONNECTOR": settings.bitrix_connector_id,
+            "LINE": settings.bitrix_connector_line_id,
+        })
     except Exception as exc:
         return {"error": str(exc)}
 
 
 async def list_open_lines() -> list[dict]:
-    """Lista los Open Channels disponibles en Bitrix24."""
+    """Lista los Open Channels disponibles."""
     try:
         result = await _call("imopenlines.config.get", {"PARAMS": {}})
         lines = result.get("result", [])
         return lines if isinstance(lines, list) else []
     except Exception as exc:
         logger.error("connector_list_lines_error", extra={"error": str(exc)})
-        return []
-
-
-async def get_dialog_messages(dialog_id: str, last_id: int = 0) -> list[dict]:
-    """Obtiene mensajes del diálogo de Open Lines para el polling del asesor."""
-    try:
-        result = await _call(
-            "im.dialog.messages.get",
-            {"DIALOG_ID": f"chat{dialog_id}", "LAST_ID": last_id, "LIMIT": 50},
-        )
-        messages = result.get("result", {}).get("messages", [])
-        return messages if isinstance(messages, list) else []
-    except Exception as exc:
-        logger.error("connector_get_dialog_error", extra={"dialog_id": dialog_id, "error": str(exc)})
         return []
