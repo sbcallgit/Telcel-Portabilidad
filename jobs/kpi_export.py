@@ -348,7 +348,7 @@ async def export_to_csv(filepath: str | None = None) -> str:
     """Vuelca kpi_conversaciones a CSV. Retorna la ruta del archivo generado."""
     if not filepath:
         ts = datetime.now(tz=TZ).strftime("%Y%m%d_%H%M")
-        filepath = f"/tmp/kpi_conversaciones_{ts}.csv"
+        filepath = f"/app/exports/kpi_conversaciones_{ts}.csv"
 
     rows = await db.fetch("SELECT * FROM kpi_conversaciones ORDER BY creado_el DESC NULLS LAST")
     if not rows:

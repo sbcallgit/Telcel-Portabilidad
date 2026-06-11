@@ -8,6 +8,8 @@ services:
     environment:
       - DB_HOST=postgres
       - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./exports:/app/exports
     depends_on:
       postgres:
         condition: service_healthy

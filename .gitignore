@@ -54,3 +54,4 @@ logs/
 
 # Pre-commit
 .pre-commit-cache/
+exports/
