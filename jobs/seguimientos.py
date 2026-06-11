@@ -218,7 +218,9 @@ async def job_seguimientos() -> None:
 
 
 def create_scheduler() -> AsyncIOScheduler:
-    """Crea y configura el scheduler de seguimientos."""
+    """Crea y configura el scheduler: seguimientos (cada 5m) + kpi_export (3am)."""
+    from jobs.kpi_export import job_kpi_export
+
     scheduler = AsyncIOScheduler(timezone=TZ)
     scheduler.add_job(
         job_seguimientos,
@@ -228,5 +230,16 @@ def create_scheduler() -> AsyncIOScheduler:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=60,
+    )
+    scheduler.add_job(
+        job_kpi_export,
+        trigger="cron",
+        hour=3,
+        minute=0,
+        timezone=TZ,
+        id="kpi_export",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     return scheduler

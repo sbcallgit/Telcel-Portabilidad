@@ -116,6 +116,11 @@ class BitrixClient:
         logger.info("bitrix_tipificacion_set", extra={"deal_id": deal_id, "tipo": tipificacion})
         return result
 
+    async def get_deal(self, deal_id: str) -> dict:
+        """Retorna los campos del deal: STAGE_ID, ASSIGNED_BY_ID, SOURCE_ID, CLOSEDATE, CONTACT_ID."""
+        result = await self._call("crm.deal.get", {"id": deal_id})
+        return result.get("result", {})
+
     async def marcar_venta_exitosa(self, deal_id: str) -> dict:
         """Mueve el deal a la etapa VENTA (C90:WON)."""
         result = await self._call(

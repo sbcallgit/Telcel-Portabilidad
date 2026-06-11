@@ -49,3 +49,7 @@ format:
 # Health check rápido
 health:
 	curl -s http://localhost:8000/health | python -m json.tool
+
+# Exporta kpi_conversaciones a CSV en /tmp/
+export_kpi:
+	docker compose exec api python -c "import asyncio; from jobs.kpi_export import export_to_csv; print(asyncio.run(export_to_csv()))"

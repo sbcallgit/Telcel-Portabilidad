@@ -104,4 +104,35 @@ CREATE TABLE IF NOT EXISTS paquetes_asl (
     notas TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Tabla de KPIs de conversaciones para exportación a BI (aislada del agente)
+CREATE TABLE IF NOT EXISTS kpi_conversaciones (
+    id SERIAL PRIMARY KEY,
+    id_conversacion TEXT NOT NULL UNIQUE,
+    id_contacto TEXT NOT NULL DEFAULT '',
+    id_negociacion TEXT NOT NULL DEFAULT '',
+    telefono TEXT NOT NULL DEFAULT '',
+    pipeline TEXT NOT NULL DEFAULT '',
+    origen TEXT NOT NULL DEFAULT '',
+    primer_mensaje TEXT NOT NULL DEFAULT '',
+    tipo_mensaje TEXT NOT NULL DEFAULT 'Entrante',
+    estado_actual TEXT NOT NULL DEFAULT '',
+    etapa TEXT NOT NULL DEFAULT '',
+    empleado TEXT NOT NULL DEFAULT '',
+    mensajes_totales INTEGER NOT NULL DEFAULT 0,
+    mensajes_cliente INTEGER NOT NULL DEFAULT 0,
+    mensajes_bot INTEGER NOT NULL DEFAULT 0,
+    mensajes_humano INTEGER NOT NULL DEFAULT 0,
+    creado_el TIMESTAMPTZ,
+    primera_respuesta TIMESTAMPTZ,
+    el_bot_respondio_el TIMESTAMPTZ,
+    solicitud_enviada_al_agente_el TIMESTAMPTZ,
+    el_agente_respondio_el TIMESTAMPTZ,
+    cerrado_el TIMESTAMPTZ,
+    tiempo_primera_respuesta_segs NUMERIC,
+    tiempo_promedio_respuestas_segs NUMERIC,
+    tiempo_maximo_respuesta_segs NUMERIC,
+    tiempo_cierre_segs NUMERIC,
+    fecha_extraccion TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """

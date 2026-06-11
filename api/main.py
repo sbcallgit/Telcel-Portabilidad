@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from integrations.postgres.client import close_pool, create_pool
     from integrations.redis_client import close_redis, get_redis
     from jobs.connector_poll import start_connector_poll, stop_connector_poll
+    from jobs.seguimientos import create_scheduler
     from agents.portabilidad.graph import setup_graph
 
     await create_pool()
@@ -50,7 +51,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await setup_graph()  # Fallback a MemorySaver
 
     await start_connector_poll()
+    scheduler = create_scheduler()
+    scheduler.start()
+    logger.info("scheduler_started")
     yield
+    scheduler.shutdown(wait=False)
     await stop_connector_poll()
     await close_redis()
     await close_pool()
