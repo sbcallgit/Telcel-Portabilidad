@@ -133,6 +133,17 @@ CREATE TABLE IF NOT EXISTS kpi_conversaciones (
     tiempo_promedio_respuestas_segs NUMERIC,
     tiempo_maximo_respuesta_segs NUMERIC,
     tiempo_cierre_segs NUMERIC,
+    texto_usuario TEXT NOT NULL DEFAULT '',
+    texto_agente TEXT NOT NULL DEFAULT '',
+    texto_humano TEXT NOT NULL DEFAULT '',
+    resumen TEXT NOT NULL DEFAULT '',
     fecha_extraccion TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Columnas de texto y resumen (para instancias existentes)
+ALTER TABLE kpi_conversaciones
+  ADD COLUMN IF NOT EXISTS texto_usuario TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS texto_agente  TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS texto_humano  TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS resumen       TEXT NOT NULL DEFAULT '';
 """

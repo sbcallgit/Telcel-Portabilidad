@@ -85,7 +85,7 @@ async def _list_threads() -> list[dict]:
 
 
 async def _get_message_counts(phone: str) -> dict:
-    """Cuenta mensajes por actor (cliente/bot) usando graph.aget_state()."""
+    """Cuenta mensajes y extrae texto por actor (cliente/bot) usando graph.aget_state()."""
     try:
         from langchain_core.messages import AIMessage, HumanMessage
         from agents.portabilidad.graph import get_agent_graph
@@ -98,10 +98,24 @@ async def _get_message_counts(phone: str) -> dict:
 
         messages = snapshot.values.get("messages") or []
         primer_msg = next((m.content for m in messages if isinstance(m, HumanMessage)), "")
+
+        texto_usuario_parts: list[str] = []
+        texto_agente_parts: list[str] = []
+        for m in messages:
+            content = str(m.content).strip()
+            if not content:
+                continue
+            if isinstance(m, HumanMessage):
+                texto_usuario_parts.append(content)
+            elif isinstance(m, AIMessage):
+                texto_agente_parts.append(content)
+
         return {
-            "mensajes_cliente": sum(1 for m in messages if isinstance(m, HumanMessage)),
-            "mensajes_bot": sum(1 for m in messages if isinstance(m, AIMessage)),
+            "mensajes_cliente": len(texto_usuario_parts),
+            "mensajes_bot": len(texto_agente_parts),
             "primer_mensaje": primer_msg[:500],
+            "texto_usuario": "\n---\n".join(texto_usuario_parts),
+            "texto_agente": "\n---\n".join(texto_agente_parts),
         }
     except Exception as exc:
         logger.warning("kpi_msg_count_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
@@ -211,18 +225,64 @@ async def _get_chat_data(phone: str) -> dict:
             if 0 < (timestamps[i] - timestamps[i - 1]).total_seconds() < 3600
         ]
 
+        texto_humano_parts: list[str] = []
+        for msg in messages:
+            params = msg.get("params") or {}
+            text = (msg.get("text") or "").strip()
+            is_bot = text.startswith("🤖 Vera |")
+            is_client = bool(isinstance(params, dict) and params.get("CONNECTOR_MID")) and not is_bot
+            author_id = msg.get("author_id", 0)
+            if not is_client and not is_bot and author_id and text:
+                texto_humano_parts.append(text)
+
         return {
             "primer_msg_cliente_ts": primer_msg_cliente_ts,
             "primera_respuesta": primera_respuesta,
             "el_bot_respondio_el": el_bot_respondio_el,
             "el_agente_respondio_el": el_agente_respondio_el,
             "mensajes_humano": mensajes_humano,
+            "texto_humano": "\n---\n".join(texto_humano_parts),
             "tiempo_promedio_respuestas_segs": round(sum(gaps) / len(gaps), 1) if gaps else None,
             "tiempo_maximo_respuesta_segs": round(max(gaps), 1) if gaps else None,
         }
     except Exception as exc:
         logger.warning("kpi_chat_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
         return {}
+
+
+async def _generate_summary(
+    texto_usuario: str,
+    texto_agente: str,
+    texto_humano: str,
+    etapa: str,
+) -> str:
+    """Genera un resumen de la conversación usando el LLM del proyecto."""
+    if not texto_usuario:
+        return ""
+    try:
+        from agents.llm import get_llm
+
+        partes = [f"Cliente:\n{texto_usuario[:800]}"]
+        if texto_agente:
+            partes.append(f"Vera (bot):\n{texto_agente[:800]}")
+        if texto_humano:
+            partes.append(f"Asesor humano:\n{texto_humano[:400]}")
+
+        conversacion = "\n\n".join(partes)
+        prompt = (
+            "Eres un analista de ventas de portabilidad Telcel. "
+            "Resume en máximo 3 oraciones cortas esta conversación. "
+            f"La etapa final fue: {etapa or 'desconocida'}. "
+            "Incluye: qué quería el cliente, cómo respondió el agente y el resultado. "
+            "Responde solo el resumen, sin encabezados ni viñetas.\n\n"
+            f"{conversacion}"
+        )
+        llm = get_llm(temperature=0.1)
+        response = await llm.ainvoke(prompt)
+        return str(response.content).strip()[:600]
+    except Exception as exc:
+        logger.warning("kpi_summary_error", extra={"error": str(exc)})
+        return ""
 
 
 async def _upsert(thread: dict) -> None:
@@ -264,6 +324,12 @@ async def _upsert(thread: dict) -> None:
     msgs_bot = msg_data.get("mensajes_bot", 0)
     msgs_humano = chat.get("mensajes_humano", 0)
 
+    texto_usuario = msg_data.get("texto_usuario", "")
+    texto_agente = msg_data.get("texto_agente", "")
+    texto_humano = chat.get("texto_humano", "")
+
+    resumen = await _generate_summary(texto_usuario, texto_agente, texto_humano, etapa)
+
     await db.execute(
         """
         INSERT INTO kpi_conversaciones (
@@ -275,6 +341,7 @@ async def _upsert(thread: dict) -> None:
             solicitud_enviada_al_agente_el, el_agente_respondio_el, cerrado_el,
             tiempo_primera_respuesta_segs, tiempo_promedio_respuestas_segs,
             tiempo_maximo_respuesta_segs, tiempo_cierre_segs,
+            texto_usuario, texto_agente, texto_humano, resumen,
             fecha_extraccion
         ) VALUES (
             $1, $2, $3, $4,
@@ -284,6 +351,7 @@ async def _upsert(thread: dict) -> None:
             $16, $17, $18,
             $19, $20, $21,
             $22, $23, $24, $25,
+            $26, $27, $28, $29,
             NOW()
         )
         ON CONFLICT (id_conversacion) DO UPDATE SET
@@ -308,6 +376,10 @@ async def _upsert(thread: dict) -> None:
             tiempo_promedio_respuestas_segs = EXCLUDED.tiempo_promedio_respuestas_segs,
             tiempo_maximo_respuesta_segs   = EXCLUDED.tiempo_maximo_respuesta_segs,
             tiempo_cierre_segs             = EXCLUDED.tiempo_cierre_segs,
+            texto_usuario                  = EXCLUDED.texto_usuario,
+            texto_agente                   = EXCLUDED.texto_agente,
+            texto_humano                   = EXCLUDED.texto_humano,
+            resumen                        = EXCLUDED.resumen,
             fecha_extraccion               = NOW()
         """,
         phone, deal.get("id_contacto", ""), deal_id, phone,
@@ -325,6 +397,7 @@ async def _upsert(thread: dict) -> None:
         chat.get("tiempo_promedio_respuestas_segs"),
         chat.get("tiempo_maximo_respuesta_segs"),
         tiempo_cierre,
+        texto_usuario, texto_agente, texto_humano, resumen,
     )
 
 
