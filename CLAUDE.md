@@ -149,6 +149,7 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `QDRANT_URL` | URL del servidor Qdrant (default: `http://qdrant:6333`) |
 | `QDRANT_API_KEY` | API key de Qdrant (obligatoria en producción) |
 | `QDRANT_EMBEDDING_MODEL` | Modelo fastembed local (default: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`) |
+| `ADMIN_TOKEN` | Token para el endpoint `POST /admin/kpi-export` (header `X-Admin-Token`). Default `changeme` — cambiar en producción. |
 
 ---
 
@@ -355,15 +356,22 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 
 ### Tabla `kpi_conversaciones`
 
-Tabla aislada del agente (no la usan los nodos). Una fila por conversación. Se crea con el DDL en `db/migrations.py` (incluido en `make seed`).
+Tabla aislada del agente (no la usan los nodos). Una fila por conversación. Se crea con el DDL en `db/migrations.py` (incluido en `make seed`). Las columnas nuevas incluyen `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` para instancias existentes.
 
 | Campo | Fuente |
 |---|---|
 | `id_conversacion`, `etapa`, `bitrix_lead_id` | Checkpoints LangGraph (`checkpoints` table, JSONB `channel_values`) |
 | `creado_el` | Primer checkpoint del thread (`MIN(checkpoint->>'ts')`) |
 | `estado_actual`, `empleado`, `origen`, `cerrado_el` | Bitrix `crm.deal.get` |
-| `mensajes_cliente`, `mensajes_bot`, `primer_mensaje` | `graph.aget_state()` — requiere checkpointer PG activo |
-| `mensajes_humano`, `primera_respuesta`, `el_agente_respondio_el`, tiempos | Bitrix Open Lines `im.dialog.messages.get` |
+| `mensajes_cliente`, `mensajes_bot`, `primer_mensaje`, `texto_usuario`, `texto_agente` | `graph.aget_state()` — requiere checkpointer PG activo |
+| `mensajes_humano`, `primera_respuesta`, `el_agente_respondio_el`, tiempos, `texto_humano` | Bitrix Open Lines `im.dialog.messages.get` |
+| `resumen` | LLM (OpenRouter/Claude) — 3 oraciones: qué quería el cliente, cómo respondió el agente, resultado |
+
+**Columnas de texto completo:** `texto_usuario`, `texto_agente` y `texto_humano` contienen todos los mensajes de cada actor concatenados con `\n---\n`. `texto_usuario` / `texto_agente` vienen de los `HumanMessage` / `AIMessage` de LangGraph; `texto_humano` filtra los mensajes de Bitrix Open Lines que no tienen `CONNECTOR_MID` (mensajes del asesor, no del conector externo).
+
+**Clasificación de mensajes en Open Lines:** los mensajes del bot tienen `CONNECTOR_MID` porque se envían via imconnector, pero se distinguen de los mensajes del cliente por el prefijo `"🤖 Vera |"`. El campo `is_client` se fuerza a `False` si `is_bot` es `True`.
+
+**`tiempo_primera_respuesta_segs`:** se calcula como `primera_respuesta - primer_msg_cliente_ts` usando timestamps de Bitrix para ambos extremos (evita el offset del debounce 10s que existe en `creado_el` del checkpoint). Bitrix devuelve los timestamps como ISO 8601 (`"2026-06-11T21:13:24+03:00"`), no como Unix epoch. Valores negativos se clampean a 0 (misma resolución de 1s).
 
 ### Job nocturno (`jobs/kpi_export.py`)
 
@@ -371,8 +379,20 @@ Tabla aislada del agente (no la usan los nodos). Una fila por conversación. Se 
 - Fuente: tabla `checkpoints` (últimos 30 días, máx 500 threads), no la tabla `leads`
 - Procesa en lotes de 50 con 0.3s de pausa entre lotes para no saturar el event loop
 - Upsert por `id_conversacion` → seguro re-ejecutar
+- El resumen LLM agrega ~2-3s por conversación; para 500 conversaciones son ~25 min — dentro de la ventana nocturna
 - `_ensure_graph_initialized()`: en el proceso FastAPI el grafo ya está listo; en standalone inicializa un pool psycopg con timeout de 8s
 - **`solicitud_enviada_al_agente_el`:** pendiente v2 (no hay timestamp de escalación en el estado actual)
+
+### Trigger manual
+
+Para regenerar la tabla sin esperar las 3am (corre dentro del proceso FastAPI con el checkpointer PG y OAuth de Bitrix activos):
+
+```bash
+curl -X POST https://portabilidad.callcomcc.io/admin/kpi-export \
+  -H "X-Admin-Token: <ADMIN_TOKEN>"
+```
+
+El endpoint retorna `{"status": "started"}` inmediatamente y el job corre en background. Progreso en logs (`job_kpi_export_done` con `total`, `procesados`, `errores`, `duracion_s`).
 
 ### Export a CSV
 
