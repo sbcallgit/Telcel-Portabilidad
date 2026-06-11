@@ -25,6 +25,8 @@ services:
       POSTGRES_DB: ${DB_NAME:-portabilidad}
       POSTGRES_USER: ${DB_USER:-bot}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-botpassword}
+    ports:
+      - "5434:5432"
     volumes:
       - portabilidad_postgres_data:/var/lib/postgresql/data
     healthcheck:
