@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     # Debounce de mensajes WhatsApp (ms; 0 = desactivado)
     debounce_window_ms: int = 1500
 
+    # Admin
+    admin_token: str = "changeme"
+
     # App
     app_version: str = "1.0.0"
     environment: str = "development"

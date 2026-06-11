@@ -165,9 +165,10 @@ async def _get_chat_data(phone: str) -> dict:
         if not messages:
             return {}
 
-        primera_respuesta = None
-        el_bot_respondio_el = None
-        el_agente_respondio_el = None
+        primer_msg_cliente_ts: datetime | None = None
+        primera_respuesta: datetime | None = None
+        el_bot_respondio_el: datetime | None = None
+        el_agente_respondio_el: datetime | None = None
         mensajes_humano = 0
         timestamps: list[datetime] = []
 
@@ -175,14 +176,24 @@ async def _get_chat_data(phone: str) -> dict:
             ts_raw = msg.get("date")
             if not ts_raw:
                 continue
-            dt = datetime.fromtimestamp(int(ts_raw), tz=timezone.utc)
+            try:
+                dt = datetime.fromisoformat(str(ts_raw))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue
             timestamps.append(dt)
 
             params = msg.get("params") or {}
             text = (msg.get("text") or "").strip()
             author_id = msg.get("author_id", 0)
-            is_client = bool(isinstance(params, dict) and params.get("CONNECTOR_MID"))
             is_bot = text.startswith("🤖 Vera |")
+            # Mensajes del bot se envían via imconnector (tienen CONNECTOR_MID)
+            # pero NO son mensajes del cliente — se distinguen por el prefijo del texto.
+            is_client = bool(isinstance(params, dict) and params.get("CONNECTOR_MID")) and not is_bot
+
+            if is_client and primer_msg_cliente_ts is None:
+                primer_msg_cliente_ts = dt
 
             if not is_client:
                 if primera_respuesta is None:
@@ -201,6 +212,7 @@ async def _get_chat_data(phone: str) -> dict:
         ]
 
         return {
+            "primer_msg_cliente_ts": primer_msg_cliente_ts,
             "primera_respuesta": primera_respuesta,
             "el_bot_respondio_el": el_bot_respondio_el,
             "el_agente_respondio_el": el_agente_respondio_el,
@@ -233,11 +245,15 @@ async def _upsert(thread: dict) -> None:
         chat = {}
 
     primera_respuesta = chat.get("primera_respuesta")
+    primer_msg_cliente_ts = chat.get("primer_msg_cliente_ts")
     cerrado_el = deal.get("cerrado_el")
 
+    # Tiempo desde el primer mensaje del cliente hasta la primera respuesta (bot o humano).
+    # Se usa el timestamp de Bitrix para ambos extremos — evita el offset del debounce (10s).
+    # max(0, ...) porque Bitrix tiene precisión de 1s y la respuesta puede llegar en el mismo segundo.
     tiempo_primera = (
-        round((primera_respuesta - creado_el).total_seconds(), 1)
-        if creado_el and primera_respuesta else None
+        max(0.0, round((primera_respuesta - primer_msg_cliente_ts).total_seconds(), 1))
+        if primer_msg_cliente_ts and primera_respuesta else None
     )
     tiempo_cierre = (
         round((cerrado_el - creado_el).total_seconds(), 1)

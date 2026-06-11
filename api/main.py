@@ -5,6 +5,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, Response
 
+from api.routes.admin import router as admin_router
 from api.routes.bitrix import router as bitrix_router
 from api.routes.connector import router as connector_router
 from api.routes.health import router as health_router
@@ -95,3 +96,4 @@ app.include_router(webhooks_router)
 app.include_router(telegram_router)
 app.include_router(bitrix_router)
 app.include_router(connector_router)
+app.include_router(admin_router)
