@@ -47,8 +47,23 @@ _FIN_PROSPECTO = [
 ]
 
 
+_ESCALAMIENTO_DURO = {
+    "solicitud_directa",
+    "caso_sensible",
+    "solicitud_arco",
+    "telcel_a_telcel",
+    "cambio_titularidad",
+    "lada_no_identificada",
+}
+
+
 async def _fin_node(state: PortabilidadState) -> dict:
-    """Post-escalamiento: re-detecta intents clave y actualiza Bitrix en consecuencia."""
+    """Post-escalamiento: re-detecta intents clave y actualiza Bitrix en consecuencia.
+
+    Escalamiento duro (asesor tomó control): bot silenciado; solo reactiva si el
+    cliente decide avanzar explícitamente (_FIN_PROSPECTO).
+    Seguimiento suave: bot sigue activo para confirmar o responder preguntas.
+    """
     from agents.portabilidad.nodes.escalate import _build_context, _try_bitrix
 
     messages = state.get("messages") or []
@@ -57,6 +72,35 @@ async def _fin_node(state: PortabilidadState) -> dict:
     phone = state.get("customer_phone", "")
     datos = state.get("datos_lead") or {}
     promo = state.get("promo_elegida", "")
+    motivo = state.get("motivo_escalacion", "")
+
+    # ── Escalamiento duro: asesor humano tiene el control ─────────────────────
+    if motivo in _ESCALAMIENTO_DURO:
+        # Única excepción: cliente se decide a portarse → reactivar a Prospecto
+        if any(w in lower for w in _FIN_PROSPECTO):
+            context = _build_context(state)
+            deal_id = await _try_bitrix(
+                context, phone, motivo="cierre",
+                existing_deal_id=state.get("bitrix_lead_id") or "",
+            )
+            logger.info("fin_node_reactivado", extra={
+                "phone_tail": phone[-4:] if len(phone) >= 4 else phone,
+            })
+            return {
+                "messages": [AIMessage(content=(
+                    "¡Perfecto! Te paso con un asesor para coordinar tu portabilidad. "
+                    "Te contacta en los próximos minutos."
+                ))],
+                "bitrix_lead_id": deal_id,
+            }
+        # Silencio total — el asesor humano gestiona la conversación desde Bitrix
+        logger.info("fin_node_silenciado", extra={
+            "phone_tail": phone[-4:] if len(phone) >= 4 else phone,
+            "motivo": motivo,
+        })
+        return {}
+
+    # ── Seguimiento suave: bot sigue activo ───────────────────────────────────
 
     # Cliente quiere asesor humano ahora → mover deal a Escalamiento
     if any(w in lower for w in _FIN_ESCALATION):
@@ -72,6 +116,7 @@ async def _fin_node(state: PortabilidadState) -> dict:
         return {
             "messages": [AIMessage(content="Claro, te conecto ahora mismo con un asesor. En unos minutos te contacta.")],
             "bitrix_lead_id": deal_id,
+            "motivo_escalacion": "solicitud_directa",
         }
 
     # Cliente confirma seguimiento → deal ya está en Seguimiento, solo confirmar
@@ -102,15 +147,14 @@ async def _fin_node(state: PortabilidadState) -> dict:
             "bitrix_lead_id": deal_id,
         }
 
-    # Default: Claude responde preguntas post-escalación
+    # Default seguimiento: Claude responde preguntas mientras el cliente espera
     llm = get_llm()
     system = (
         "Eres Vera, asistente de Telcel para portabilidad. "
-        "Ya conectaste a este cliente con un asesor humano que lo contactará en breve.\n\n"
-        "Datos del cliente registrados:\n"
+        "Este cliente quedó en seguimiento: un asesor lo contactará más adelante.\n\n"
+        "Datos registrados:\n"
         f"- Nombre: {datos.get('nombre') or 'no capturado'}\n"
         f"- Número a portar: {datos.get('numero_a_portar') or 'no capturado'}\n"
-        f"- Compañía donante: {datos.get('compania_donante') or 'no capturada'}\n"
         f"- Promo elegida: {promo or 'no definida'}\n\n"
         f"{ASL_CATALOG}\n"
         f"{AMAZON_PRIME_BY_PACKAGE}\n"
@@ -120,9 +164,8 @@ async def _fin_node(state: PortabilidadState) -> dict:
         f"{ID_DOCS_INFO}\n"
         f"{HARD_RULES}\n"
         f"{FORMAT_RULES}\n"
-        "TAREA: Responde cualquier pregunta del cliente de forma natural. "
-        "No repitas que ya lo conectaste con el asesor a menos que sea directamente relevante. "
-        "Si pregunta algo fuera del tema de portabilidad/Telcel, redirige brevemente."
+        "TAREA: Responde preguntas del catálogo con naturalidad. "
+        "Si el cliente decide portarse, dile que ya quedó registrado y un asesor lo contactará."
     )
 
     ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-6:]))
