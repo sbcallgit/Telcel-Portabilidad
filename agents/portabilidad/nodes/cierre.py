@@ -12,10 +12,8 @@ pero no bloquean el escalamiento al asesor.
 import logging
 import re
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessage
 
-from agents.llm import get_llm
-from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.state import PortabilidadState
 
 logger = logging.getLogger(__name__)
@@ -35,7 +33,7 @@ _COMPANIAS = {
     "weex": "Weex",
     "oui": "Oui Mobile",
 }
-_LIBERADO_SI = ["sí", "si ", "liberado", "desbloqueado", "sí está", "funciona", "acepta chip", "lo probé", "ya está"]
+_LIBERADO_SI = ["sí", "si", "liberado", "desbloqueado", "sí está", "funciona", "acepta chip", "lo probé", "ya está"]
 _LIBERADO_NO = ["no", "no sé", "no lo sé", "no estoy seguro", "no sabe", "creo que no", "nunca lo probé"]
 _ESIM = ["esim", "e-sim", "no tiene ranura", "no tiene slot"]
 _ESCALATION = ["asesor", "humano", "persona real", "agente"]
@@ -79,6 +77,51 @@ _PREGUNTAS = {
     "compania_donante": "¿De qué compañía te vienes? (Movistar, AT&T, Nextel, Unefon, etc.)",
 }
 
+# Segunda pregunta si la primera no fue entendida — sin Claude para evitar re-presentar la oferta
+_REPREGUNTAS = {
+    "nombre": "Disculpa, ¿me confirmas tu nombre completo?",
+    "numero_a_portar": "¿Me confirmas el número de 10 dígitos que quieres portar?",
+    "compania_donante": "¿De qué compañía te cambias? (Movistar, AT&T, Nextel, Bait, etc.)",
+}
+
+
+def _extract_all_kpis(user_text: str, datos: dict) -> dict:
+    """Extrae nombre, número y compañía del mismo mensaje.
+
+    Permite capturar los 3 campos KPI aunque el cliente los dé en un solo turno
+    (ej: "Rafael Canales 8112111092 Bait"). El orden de extracción importa:
+    primero teléfono y compañía (para excluirlos del texto antes de extraer el nombre).
+    """
+    # 1. Teléfono — siempre intentar
+    if not datos.get("numero_a_portar"):
+        numero = _extract_phone(user_text)
+        if numero:
+            datos["numero_a_portar"] = numero
+
+    # 2. Compañía — siempre intentar
+    if not datos.get("compania_donante"):
+        company = _extract_company(user_text)
+        if company:
+            datos["compania_donante"] = company
+
+    # 3. Nombre — quitar dígitos y palabras clave de compañías, tomar lo alfabético restante
+    if not datos.get("nombre"):
+        company_keys = set(_COMPANIAS.keys())
+        name_text = re.sub(r"\d+", " ", user_text)
+        for key in company_keys:
+            name_text = re.sub(rf"\b{re.escape(key)}\b", " ", name_text, flags=re.IGNORECASE)
+        name_words = [
+            w.strip(",.;:") for w in name_text.split()
+            if w.strip(",.;:").replace("-", "").replace("'", "").isalpha()
+            and len(w.strip(",.;:")) >= 3
+        ]
+        # Al menos 2 palabras de 3+ chars → nombre completo; o 1 si parece un solo nombre
+        if len(name_words) >= 2 or (len(name_words) == 1 and len(name_words[0]) >= 4):
+            datos["nombre"] = " ".join(name_words).strip()
+
+    return datos
+
+
 _AVISO_PRIVACIDAD = (
     "Le informo que cualquier dato personal que nos proporcione será tratado "
     "conforme al Aviso de Privacidad de Telcel, disponible en www.telcel.com."
@@ -107,31 +150,12 @@ async def cierre_node(state: PortabilidadState) -> dict:
             "motivo_escalacion": "seguimiento",
         }
 
+    # ── Extracción simultánea: teléfono, compañía y nombre del mismo mensaje ──
+    datos = _extract_all_kpis(user_text, datos)
+
     pending = _next_pending(datos)
 
-    # ── Capturar un campo por turno ──────────────────────────────────────
-    if pending == "nombre":
-        alpha_words = [w for w in user_text.split() if w.replace(",", "").isalpha() and len(w) > 1]
-        if alpha_words and len(user_text) > 3 and not user_text.strip().isdigit():
-            datos["nombre"] = user_text.strip()
-            pending = _next_pending(datos)
-
-    elif pending == "numero_a_portar":
-        numero = _extract_phone(user_text)
-        if numero:
-            datos["numero_a_portar"] = numero
-            pending = _next_pending(datos)
-
-    elif pending == "compania_donante":
-        compania = _extract_company(user_text)
-        if compania:
-            datos["compania_donante"] = compania
-            pending = _next_pending(datos)
-        elif len(user_text.strip()) > 2 and not _extract_phone(user_text) and not user_text.strip().isdigit():
-            datos["compania_donante"] = user_text.strip()
-            pending = _next_pending(datos)
-
-    # Capturar municipio si el cliente lo menciona (no bloqueante)
+    # Capturar municipio si el cliente lo menciona espontáneamente (no bloqueante)
     if pending is None and not datos.get("municipio"):
         if len(user_text.strip()) > 2 and not user_text.strip().isdigit() and not _extract_phone(user_text):
             datos["municipio"] = user_text.strip()
@@ -158,24 +182,12 @@ async def cierre_node(state: PortabilidadState) -> dict:
         }
 
     # ── Preguntar el siguiente campo ──────────────────────────────────────
+    # Nunca usar Claude aquí — con el contexto de oferta re-presenta los beneficios.
     pregunta = _PREGUNTAS.get(pending, "")
+    reciente_ai = [getattr(m, "content", "") for m in messages if hasattr(m, "type") and m.type == "ai"]
+    ya_preguntada = pregunta and any(pregunta[:30] in t for t in reciente_ai[-2:])
 
-    # Evitar repetir la misma pregunta dos veces seguidas
-    recent_texts = [getattr(m, "content", "") for m in messages[-3:]]
-    if pregunta and not any(pregunta[:30] in t for t in recent_texts):
-        return {
-            "messages": [AIMessage(content=pregunta)],
-            "datos_lead": datos,
-        }
-
-    # Fallback con Claude si la respuesta no fue clara
-    llm = get_llm()
-    campo_desc = {
-        "nombre": "nombre completo del cliente",
-        "numero_a_portar": "número de teléfono de 10 dígitos que desea portar",
-        "compania_donante": "compañía actual del cliente (Movistar, AT&T, Nextel, etc.)",
-    }.get(pending or "", "información")
-
-    system = render_prompt("cierre_fallback", campo_desc=campo_desc)
-    ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-4:]))
-    return {"messages": split_msg(ai_msg.content), "datos_lead": datos}
+    return {
+        "messages": [AIMessage(content=_REPREGUNTAS[pending] if ya_preguntada else pregunta)],
+        "datos_lead": datos,
+    }

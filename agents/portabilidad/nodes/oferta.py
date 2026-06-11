@@ -1,6 +1,7 @@
 """Nodo de oferta: presenta las promos reales y detecta intención de compra u objeción."""
 
 import logging
+import re
 
 from langchain_core.messages import AIMessage, SystemMessage
 
@@ -25,10 +26,22 @@ from integrations.postgres import client as db
 logger = logging.getLogger(__name__)
 
 _BUY_WORDS = [
-    "sí", "si ", "quiero", "acepto", "adelante", "vamos", "ok", "dale", "listo",
+    "sí", "si", "quiero", "acepto", "adelante", "vamos", "ok", "dale", "listo",
     "me interesa", "claro que sí", "apúnteme", "anóteme", "confirmado", "procede",
     "la quiero", "esa me gusta", "me convenciste", "va", "bueno", "de acuerdo",
 ]
+
+
+def _has_buy_intent(lower: str) -> bool:
+    """Detecta intención de compra con word boundaries para palabras cortas."""
+    for w in _BUY_WORDS:
+        if " " in w:
+            if w in lower:
+                return True
+        else:
+            if re.search(rf"\b{re.escape(w)}\b", lower):
+                return True
+    return False
 _CLOSE_PHRASES = ["ya decidí", "me quedo con", "la acepto", "esa opción", "quiero la de"]
 _OBJECTION_WORDS = [
     "caro", "pensarlo", "esperar", "luego", "dudas", "no sé", "tal vez",
@@ -305,11 +318,14 @@ async def oferta_node(state: PortabilidadState) -> dict:
         }
 
     # Intención de compra con promo ya mostrada
-    if promo_actual and any(w in lower for w in _BUY_WORDS):
+    if promo_actual and _has_buy_intent(lower):
         return {
             "messages": [AIMessage(content=(
-                "¡Excelente decisión! Para apartar su beneficio necesito unos datos.\n"
-                "¿Cuál es su nombre completo?"
+                "¡Buenísimo! 🎉 Para apartar tu beneficio necesito 3 datos:\n"
+                "1) Tu nombre completo\n"
+                "2) El número de 10 dígitos que vas a portar\n"
+                "3) De qué compañía te vienes\n\n"
+                "¿Me los compartes?"
             ))],
             "etapa": "cierre",
         }
