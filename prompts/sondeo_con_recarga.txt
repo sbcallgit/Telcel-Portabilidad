@@ -7,6 +7,7 @@ PROMO DISPONIBLE PARA ESTE PERFIL (usa SOLO estos datos, nunca inventes):
 {ASL_CATALOG}
 {AMAZON_PRIME_BY_PACKAGE}
 {OFFER_TEMPLATE}
+{ANTI_RENDICION}
 {HARD_RULES}
 {FORMAT_RULES}
 TAREA: Presenta la oferta brevemente con la plantilla OFFER_TEMPLATE.

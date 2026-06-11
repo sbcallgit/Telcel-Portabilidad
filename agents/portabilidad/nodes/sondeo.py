@@ -14,6 +14,7 @@ from agents.llm import get_llm
 from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
     AMAZON_PRIME_BY_PACKAGE,
+    ANTI_RENDICION,
     ASL_CATALOG,
     CHANNEL_RULES,
     CLARO_DRIVE_MUSICA,
@@ -274,6 +275,7 @@ async def sondeo_node(state: PortabilidadState) -> dict:
                 ASL_CATALOG=ASL_CATALOG,
                 AMAZON_PRIME_BY_PACKAGE=AMAZON_PRIME_BY_PACKAGE,
                 OFFER_TEMPLATE=OFFER_TEMPLATE,
+                ANTI_RENDICION=ANTI_RENDICION,
                 HARD_RULES=HARD_RULES,
                 FORMAT_RULES=FORMAT_RULES,
             )
@@ -309,6 +311,7 @@ async def sondeo_node(state: PortabilidadState) -> dict:
         PORTABILITY_SCHEDULE=PORTABILITY_SCHEDULE,
         CLARO_DRIVE_MUSICA=CLARO_DRIVE_MUSICA,
         ID_DOCS_INFO=ID_DOCS_INFO,
+        ANTI_RENDICION=ANTI_RENDICION,
         HARD_RULES=HARD_RULES,
         FORMAT_RULES=FORMAT_RULES,
     )

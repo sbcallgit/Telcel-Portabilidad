@@ -8,6 +8,7 @@ from agents.llm import get_llm
 from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
     AMAZON_PRIME_BY_PACKAGE,
+    ANTI_RENDICION,
     ASL_CATALOG,
     CHANNEL_RULES,
     CLARO_DRIVE_MUSICA,
@@ -338,6 +339,7 @@ async def oferta_node(state: PortabilidadState) -> dict:
         AMAZON_PRIME_BY_PACKAGE=AMAZON_PRIME_BY_PACKAGE,
         CLARO_DRIVE_MUSICA=CLARO_DRIVE_MUSICA,
         ID_DOCS_INFO=ID_DOCS_INFO,
+        ANTI_RENDICION=ANTI_RENDICION,
         HARD_RULES=HARD_RULES,
         FORMAT_RULES=FORMAT_RULES,
     )

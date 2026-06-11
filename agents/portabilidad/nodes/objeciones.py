@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
 from agents.portabilidad.utils import render_prompt, split_msg
-from agents.portabilidad.context import FORMAT_RULES, HARD_RULES, OBJECTIONS_BANK
+from agents.portabilidad.context import ANTI_RENDICION, FORMAT_RULES, HARD_RULES, OBJECTIONS_BANK, OBJECTIONS_HANDLING
 from agents.portabilidad.state import PortabilidadState
 from integrations.postgres import client as db
 
@@ -173,6 +173,8 @@ async def objeciones_node(state: PortabilidadState) -> dict:
         "objeciones",
         promo=promo or "portabilidad Telcel",
         base_response=base_response or "(no disponible)",
+        ANTI_RENDICION=ANTI_RENDICION,
+        OBJECTIONS_HANDLING=OBJECTIONS_HANDLING,
         OBJECTIONS_BANK=OBJECTIONS_BANK,
         HARD_RULES=HARD_RULES,
         FORMAT_RULES=FORMAT_RULES,

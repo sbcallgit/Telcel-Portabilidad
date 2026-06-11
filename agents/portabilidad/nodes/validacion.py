@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, SystemMessage
 from agents.llm import get_llm
 from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
+    ANTI_RENDICION,
     ASL_CATALOG,
     CHANNEL_RULES,
     CLARO_DRIVE_MUSICA,
@@ -478,6 +479,7 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
     system = render_prompt(
         "validacion_general",
         SALES_APPROACH=SALES_APPROACH,
+        ANTI_RENDICION=ANTI_RENDICION,
         ASL_CATALOG=ASL_CATALOG,
         CHANNEL_RULES=CHANNEL_RULES,
         PORTABILITY_SCHEDULE=PORTABILITY_SCHEDULE,
