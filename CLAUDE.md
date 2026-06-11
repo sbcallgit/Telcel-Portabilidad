@@ -73,7 +73,8 @@ bot_telcel_portabilidad/
 │   └── routes/
 │       ├── health.py        # GET /health — status ok/degraded + check de DB
 │       ├── webhooks.py      # POST/GET /webhooks/telcel — entry point de WhatsApp
-│       └── telegram.py      # POST /webhooks/telegram — entry point de Telegram (pruebas)
+│       ├── telegram.py      # POST /webhooks/telegram — entry point de Telegram (pruebas)
+│       └── admin.py         # POST /admin/kpi-export — trigger manual del job de KPIs (X-Admin-Token)
 │
 ├── db/                      # Capa de datos
 │   ├── models.py            # Modelos Pydantic: Lead, Lada, Promo, CAC, Objecion
