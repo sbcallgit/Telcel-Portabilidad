@@ -377,7 +377,7 @@ Tabla aislada del agente (no la usan los nodos). Una fila por conversación. Se 
 ### Export a CSV
 
 - **Comando:** `make export_kpi`
-- **Ruta en contenedor:** `/app/exports/kpi_conversaciones_{YYYYMMDD_HHMM}.csv`
-- **Ruta en host:** `./exports/kpi_conversaciones_{YYYYMMDD_HHMM}.csv` (volumen bind mount en `docker-compose.yml`)
+- **Ruta en contenedor:** `/app/reporteskpi/kpi_conversaciones_{YYYYMMDD_HHMM}.csv`
+- **Ruta en host:** `./reporteskpi/kpi_conversaciones_{YYYYMMDD_HHMM}.csv` (volumen bind mount en `docker-compose.yml`)
 - Encoding `utf-8-sig` (compatible con Excel / Power BI sin problemas de tildes)
-- La carpeta `./exports/` está en `.gitignore` — los CSVs no se suben al repo
+- La carpeta `./reporteskpi/` está en `.gitignore` — los CSVs no se suben al repo
