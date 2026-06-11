@@ -1,7 +1,7 @@
 """Job nocturno de extracción de KPIs de conversaciones para exportación a BI.
 
 Corre a las 3:00 AM America/Monterrey — fuera del horario de portabilidad.
-Fuentes: leads (PG) + LangGraph checkpoints + Bitrix crm.deal.get + Open Lines.
+Fuentes: checkpoints (PG) + Bitrix crm.deal.get + Open Lines.
 Destino: tabla kpi_conversaciones (aislada del agente).
 """
 
@@ -21,37 +21,95 @@ _BATCH_SIZE = 50
 _BATCH_SLEEP = 0.3  # cede el event loop entre lotes
 
 
-async def _get_checkpoint_data(phone: str) -> dict:
-    """Lee mensajes del estado LangGraph para contar por actor y capturar el primer mensaje."""
+async def _ensure_graph_initialized() -> None:
+    """Inicializa el grafo con checkpointer PostgreSQL si aún no está listo.
+
+    Dentro del proceso FastAPI ya está inicializado vía lifespan.
+    En standalone (test manual, make export_kpi) lo inicializa aquí con timeout.
+    """
+    import agents.portabilidad.graph as graph_module
+    if graph_module._agent_graph is not None:
+        return
+    try:
+        from psycopg_pool import AsyncConnectionPool
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from config.settings import settings
+
+        pool = AsyncConnectionPool(
+            conninfo=settings.database_dsn,
+            min_size=1,
+            max_size=3,
+            kwargs={"autocommit": True, "prepare_threshold": 0},
+            open=False,
+        )
+        await asyncio.wait_for(pool.open(), timeout=8.0)
+        checkpointer = AsyncPostgresSaver(pool)
+        await graph_module.setup_graph(checkpointer)
+        logger.info("kpi_graph_initialized_standalone")
+    except Exception as exc:
+        logger.warning("kpi_graph_init_failed_fallback", extra={"error": str(exc)})
+        await graph_module.setup_graph()  # MemorySaver — sin historial en standalone
+
+
+async def _list_threads() -> list[dict]:
+    """Retorna thread_id, creado_el y campos de estado del último checkpoint."""
+    rows = await db.fetch(
+        """
+        WITH latest AS (
+            SELECT DISTINCT ON (thread_id)
+                thread_id,
+                checkpoint->'channel_values'->>'etapa'          AS etapa,
+                checkpoint->'channel_values'->>'bitrix_lead_id' AS bitrix_lead_id,
+                checkpoint->'channel_values'->>'customer_phone' AS customer_phone
+            FROM checkpoints
+            WHERE checkpoint_ns = ''
+            ORDER BY thread_id, checkpoint_id DESC
+        ),
+        earliest AS (
+            SELECT DISTINCT ON (thread_id)
+                thread_id,
+                (checkpoint->>'ts')::timestamptz AS creado_el
+            FROM checkpoints
+            WHERE checkpoint_ns = ''
+            ORDER BY thread_id, checkpoint_id ASC
+        )
+        SELECT l.thread_id, l.etapa, l.bitrix_lead_id, l.customer_phone, e.creado_el
+        FROM latest l
+        JOIN earliest e ON l.thread_id = e.thread_id
+        WHERE e.creado_el > NOW() - INTERVAL '30 days'
+        ORDER BY e.creado_el DESC
+        LIMIT 500
+        """,
+    )
+    return [dict(r) for r in rows]
+
+
+async def _get_message_counts(phone: str) -> dict:
+    """Cuenta mensajes por actor (cliente/bot) usando graph.aget_state()."""
     try:
         from langchain_core.messages import AIMessage, HumanMessage
         from agents.portabilidad.graph import get_agent_graph
 
-        graph = get_agent_graph()
-        snapshot = await graph.aget_state({"configurable": {"thread_id": phone}})
+        snapshot = await get_agent_graph().aget_state(
+            {"configurable": {"thread_id": phone}}
+        )
         if not snapshot or not snapshot.values:
             return {}
 
-        state = snapshot.values
-        messages = state.get("messages") or []
-
-        msgs_cliente = sum(1 for m in messages if isinstance(m, HumanMessage))
-        msgs_bot = sum(1 for m in messages if isinstance(m, AIMessage))
+        messages = snapshot.values.get("messages") or []
         primer_msg = next((m.content for m in messages if isinstance(m, HumanMessage)), "")
-
         return {
-            "mensajes_cliente": msgs_cliente,
-            "mensajes_bot": msgs_bot,
+            "mensajes_cliente": sum(1 for m in messages if isinstance(m, HumanMessage)),
+            "mensajes_bot": sum(1 for m in messages if isinstance(m, AIMessage)),
             "primer_mensaje": primer_msg[:500],
-            "etapa": state.get("etapa", ""),
         }
     except Exception as exc:
-        logger.warning("kpi_checkpoint_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+        logger.warning("kpi_msg_count_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
         return {}
 
 
 async def _get_deal_data(deal_id: str) -> dict:
-    """Consulta Bitrix crm.deal.get para obtener metadatos del deal."""
+    """Consulta crm.deal.get para metadatos del deal en Bitrix."""
     if not deal_id:
         return {}
     try:
@@ -84,7 +142,7 @@ async def _get_deal_data(deal_id: str) -> dict:
 
 
 async def _get_chat_data(phone: str) -> dict:
-    """Lee mensajes de Open Lines para KPIs de tiempo y conteo de mensajes humanos."""
+    """Lee mensajes de Open Lines para KPIs de tiempo y conteo humano."""
     try:
         from integrations.redis_client import get_redis
         from integrations.bitrix.connector import _call_poll
@@ -134,7 +192,6 @@ async def _get_chat_data(phone: str) -> dict:
                     if el_agente_respondio_el is None:
                         el_agente_respondio_el = dt
 
-        # Gaps entre mensajes consecutivos (excluye pausas > 1h)
         gaps = [
             (timestamps[i] - timestamps[i - 1]).total_seconds()
             for i in range(1, len(timestamps))
@@ -154,19 +211,20 @@ async def _get_chat_data(phone: str) -> dict:
         return {}
 
 
-async def _upsert(lead: dict) -> None:
-    phone = lead["telefono"]
-    deal_id = lead.get("bitrix_lead_id") or ""
-    creado_el = lead.get("created_at")
+async def _upsert(thread: dict) -> None:
+    phone = thread["thread_id"]
+    creado_el = thread.get("creado_el")
+    deal_id = thread.get("bitrix_lead_id") or ""
+    etapa = thread.get("etapa") or ""
 
-    cp, deal, chat = await asyncio.gather(
-        _get_checkpoint_data(phone),
+    msg_data, deal, chat = await asyncio.gather(
+        _get_message_counts(phone),
         _get_deal_data(deal_id),
         _get_chat_data(phone),
         return_exceptions=True,
     )
-    if isinstance(cp, Exception):
-        cp = {}
+    if isinstance(msg_data, Exception):
+        msg_data = {}
     if isinstance(deal, Exception):
         deal = {}
     if isinstance(chat, Exception):
@@ -184,8 +242,8 @@ async def _upsert(lead: dict) -> None:
         if creado_el and cerrado_el else None
     )
 
-    msgs_cliente = cp.get("mensajes_cliente", 0)
-    msgs_bot = cp.get("mensajes_bot", 0)
+    msgs_cliente = msg_data.get("mensajes_cliente", 0)
+    msgs_bot = msg_data.get("mensajes_bot", 0)
     msgs_humano = chat.get("mensajes_humano", 0)
 
     await db.execute(
@@ -211,34 +269,34 @@ async def _upsert(lead: dict) -> None:
             NOW()
         )
         ON CONFLICT (id_conversacion) DO UPDATE SET
-            id_contacto                   = EXCLUDED.id_contacto,
-            id_negociacion                = EXCLUDED.id_negociacion,
-            pipeline                      = EXCLUDED.pipeline,
-            origen                        = EXCLUDED.origen,
-            primer_mensaje                = EXCLUDED.primer_mensaje,
-            estado_actual                 = EXCLUDED.estado_actual,
-            etapa                         = EXCLUDED.etapa,
-            empleado                      = EXCLUDED.empleado,
-            mensajes_totales              = EXCLUDED.mensajes_totales,
-            mensajes_cliente              = EXCLUDED.mensajes_cliente,
-            mensajes_bot                  = EXCLUDED.mensajes_bot,
-            mensajes_humano               = EXCLUDED.mensajes_humano,
-            primera_respuesta             = EXCLUDED.primera_respuesta,
-            el_bot_respondio_el           = EXCLUDED.el_bot_respondio_el,
+            id_contacto                    = EXCLUDED.id_contacto,
+            id_negociacion                 = EXCLUDED.id_negociacion,
+            pipeline                       = EXCLUDED.pipeline,
+            origen                         = EXCLUDED.origen,
+            primer_mensaje                 = EXCLUDED.primer_mensaje,
+            estado_actual                  = EXCLUDED.estado_actual,
+            etapa                          = EXCLUDED.etapa,
+            empleado                       = EXCLUDED.empleado,
+            mensajes_totales               = EXCLUDED.mensajes_totales,
+            mensajes_cliente               = EXCLUDED.mensajes_cliente,
+            mensajes_bot                   = EXCLUDED.mensajes_bot,
+            mensajes_humano                = EXCLUDED.mensajes_humano,
+            primera_respuesta              = EXCLUDED.primera_respuesta,
+            el_bot_respondio_el            = EXCLUDED.el_bot_respondio_el,
             solicitud_enviada_al_agente_el = EXCLUDED.solicitud_enviada_al_agente_el,
-            el_agente_respondio_el        = EXCLUDED.el_agente_respondio_el,
-            cerrado_el                    = EXCLUDED.cerrado_el,
-            tiempo_primera_respuesta_segs = EXCLUDED.tiempo_primera_respuesta_segs,
+            el_agente_respondio_el         = EXCLUDED.el_agente_respondio_el,
+            cerrado_el                     = EXCLUDED.cerrado_el,
+            tiempo_primera_respuesta_segs  = EXCLUDED.tiempo_primera_respuesta_segs,
             tiempo_promedio_respuestas_segs = EXCLUDED.tiempo_promedio_respuestas_segs,
-            tiempo_maximo_respuesta_segs  = EXCLUDED.tiempo_maximo_respuesta_segs,
-            tiempo_cierre_segs            = EXCLUDED.tiempo_cierre_segs,
-            fecha_extraccion              = NOW()
+            tiempo_maximo_respuesta_segs   = EXCLUDED.tiempo_maximo_respuesta_segs,
+            tiempo_cierre_segs             = EXCLUDED.tiempo_cierre_segs,
+            fecha_extraccion               = NOW()
         """,
         phone, deal.get("id_contacto", ""), deal_id, phone,
         deal.get("pipeline", ""), deal.get("origen", ""),
-        cp.get("primer_mensaje", ""), "Entrante",
-        deal.get("estado_actual", lead.get("etapa", "")),
-        cp.get("etapa", lead.get("etapa", "")),
+        msg_data.get("primer_mensaje", ""), "Entrante",
+        deal.get("estado_actual", etapa),
+        etapa,
         deal.get("empleado", ""),
         msgs_cliente + msgs_bot + msgs_humano,
         msgs_cliente, msgs_bot, msgs_humano,
@@ -254,19 +312,13 @@ async def _upsert(lead: dict) -> None:
 
 async def job_kpi_export() -> None:
     """Extrae KPIs de todas las conversaciones de los últimos 30 días y hace upsert."""
+    await _ensure_graph_initialized()
+
     inicio = datetime.now(tz=TZ)
     logger.info("job_kpi_export_start", extra={"hora": inicio.isoformat()})
 
     try:
-        leads = await db.fetch(
-            """
-            SELECT id, telefono, etapa, bitrix_lead_id, created_at
-            FROM leads
-            WHERE created_at > NOW() - INTERVAL '30 days'
-            ORDER BY created_at DESC
-            LIMIT 500
-            """,
-        )
+        threads = await _list_threads()
     except Exception as exc:
         logger.error("job_kpi_export_db_error", extra={"error": str(exc)})
         return
@@ -274,21 +326,21 @@ async def job_kpi_export() -> None:
     procesados = 0
     errores = 0
 
-    for i in range(0, len(leads), _BATCH_SIZE):
-        batch = leads[i : i + _BATCH_SIZE]
-        for lead in batch:
+    for i in range(0, len(threads), _BATCH_SIZE):
+        batch = threads[i : i + _BATCH_SIZE]
+        for thread in batch:
             try:
-                await _upsert(dict(lead))
+                await _upsert(thread)
                 procesados += 1
             except Exception as exc:
                 errores += 1
-                logger.error("kpi_upsert_error", extra={"lead_id": lead["id"], "error": str(exc)})
+                logger.error("kpi_upsert_error", extra={"thread_id": thread["thread_id"], "error": str(exc)})
         await asyncio.sleep(_BATCH_SLEEP)
 
     duracion = round((datetime.now(tz=TZ) - inicio).total_seconds(), 1)
     logger.info(
         "job_kpi_export_done",
-        extra={"total": len(leads), "procesados": procesados, "errores": errores, "duracion_s": duracion},
+        extra={"total": len(threads), "procesados": procesados, "errores": errores, "duracion_s": duracion},
     )
 
 
