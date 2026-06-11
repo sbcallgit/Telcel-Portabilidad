@@ -115,6 +115,7 @@ make worker       # Levanta el worker de la cola de mensajes arq
 make test         # Corre tests con cobertura
 make lint         # ruff + mypy
 make health       # curl /health y muestra el resultado
+make export_kpi   # Exporta kpi_conversaciones a CSV en ./exports/
 ```
 
 ---
@@ -335,6 +336,7 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **Promos:** configuración versionada en tabla `promos`. Cuando Telcel publique nuevas, actualizar `load_promos.py` y correr `make seed`. NUNCA hardcodear precios en el agente.
 - **LADAs:** tabla técnica, no parte del guion. El bot la consulta internamente para decidir si continúa el flujo o deriva a CAC.
 - **Versiones de prompt:** editar los archivos en `prompts/` directamente. Para historial de versiones usar git. La carpeta `knowledge/prompts/` es para specs de auditoría, no para los prompts activos.
+- **APScheduler:** corre dentro del proceso FastAPI (lifespan). Dos jobs: `seguimientos` (cada 5 min, ventana L-S 9am–9pm) y `kpi_export` (cron 3am Monterrey). El scheduler se inicia en `api/main.py` con `create_scheduler().start()` y se apaga con `scheduler.shutdown(wait=False)`.
 - **Jobs timezone:** siempre `America/Monterrey` explícito. El horario de portabilidad es L-S 9am–9pm; sin domingos.
 - **Debounce:** configurar `DEBOUNCE_WINDOW_MS` en `.env`. Valor actual en producción: `10000` ms (10s). Poner `0` solo en pruebas unitarias o entornos donde cada mensaje debe procesarse de forma independiente.
 - **Telegram:** canal de pruebas que corre el mismo agente y el mismo debounce que WhatsApp. El `thread_id` de LangGraph es `str(chat_id)` en Telegram y `phone` en WhatsApp. El `phone` en Telegram tiene prefijo `tg_` (ej. `tg_8211184685`).
@@ -347,3 +349,35 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **`_fin_node` silenciado (escalamiento duro):** cuando `etapa: fin` y `motivo_escalacion` es un escalamiento duro (`solicitud_directa`, `caso_sensible`, `solicitud_arco`, `telcel_a_telcel`, `cambio_titularidad`, `lada_no_identificada`), el bot retorna `{}` — silencio total, el asesor humano gestiona la conversación desde Bitrix Open Lines. Única excepción: el cliente dice palabras de `_FIN_PROSPECTO` ("ya decidí", "quiero portarme") → el bot responde con un mensaje de confirmación y mueve el deal a `C90:PROSPECTO`. Para seguimiento suave (`seguimiento`, `max_objeciones_alcanzado`), el bot sigue activo y Claude responde preguntas mientras el cliente espera.
 - **`escalate_node` sin mensajes:** el nodo solo actualiza Bitrix y el estado del agente. No agrega `AIMessage` — el mensaje de confirmación al usuario lo genera el nodo que llama a `escalate` (cierre, objeciones, etc.).
 - **Principio Anti-Rendición (`context.py`):** las constantes `ANTI_RENDICION` y `OBJECTIONS_HANDLING` se definen en `agents/portabilidad/context.py` y se inyectan en los prompts via `render_prompt()` como `{ANTI_RENDICION}`. Aplican en `sondeo`, `oferta`, `objeciones` y `validacion`. La regla central: ante un "no", silencio o respuesta fría, Vera no cierra — intenta entender la objeción real hasta 3 veces antes del cierre cálido. Excepción: rechazo explícito, molestia real o solicitud de asesor → respetar de inmediato sin reformular.
+- **`BitrixClient.get_deal(deal_id)`:** método nuevo en `integrations/bitrix/client.py` — llama `crm.deal.get` y retorna el dict del deal (STAGE_ID, ASSIGNED_BY_ID, SOURCE_ID, CLOSEDATE, CONTACT_ID). Usado por `job_kpi_export`.
+
+## Exportación de KPIs para BI
+
+### Tabla `kpi_conversaciones`
+
+Tabla aislada del agente (no la usan los nodos). Una fila por conversación. Se crea con el DDL en `db/migrations.py` (incluido en `make seed`).
+
+| Campo | Fuente |
+|---|---|
+| `id_conversacion`, `etapa`, `bitrix_lead_id` | Checkpoints LangGraph (`checkpoints` table, JSONB `channel_values`) |
+| `creado_el` | Primer checkpoint del thread (`MIN(checkpoint->>'ts')`) |
+| `estado_actual`, `empleado`, `origen`, `cerrado_el` | Bitrix `crm.deal.get` |
+| `mensajes_cliente`, `mensajes_bot`, `primer_mensaje` | `graph.aget_state()` — requiere checkpointer PG activo |
+| `mensajes_humano`, `primera_respuesta`, `el_agente_respondio_el`, tiempos | Bitrix Open Lines `im.dialog.messages.get` |
+
+### Job nocturno (`jobs/kpi_export.py`)
+
+- Corre a las **3am America/Monterrey** via APScheduler (`id="kpi_export"`)
+- Fuente: tabla `checkpoints` (últimos 30 días, máx 500 threads), no la tabla `leads`
+- Procesa en lotes de 50 con 0.3s de pausa entre lotes para no saturar el event loop
+- Upsert por `id_conversacion` → seguro re-ejecutar
+- `_ensure_graph_initialized()`: en el proceso FastAPI el grafo ya está listo; en standalone inicializa un pool psycopg con timeout de 8s
+- **`solicitud_enviada_al_agente_el`:** pendiente v2 (no hay timestamp de escalación en el estado actual)
+
+### Export a CSV
+
+- **Comando:** `make export_kpi`
+- **Ruta en contenedor:** `/app/exports/kpi_conversaciones_{YYYYMMDD_HHMM}.csv`
+- **Ruta en host:** `./exports/kpi_conversaciones_{YYYYMMDD_HHMM}.csv` (volumen bind mount en `docker-compose.yml`)
+- Encoding `utf-8-sig` (compatible con Excel / Power BI sin problemas de tildes)
+- La carpeta `./exports/` está en `.gitignore` — los CSVs no se suben al repo
