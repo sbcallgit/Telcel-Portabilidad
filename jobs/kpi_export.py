@@ -118,9 +118,11 @@ async def _get_deal_data(deal_id: str) -> dict:
         if not deal:
             return {}
 
+        # CLOSEDATE en Bitrix es fecha estimada — solo es cierre real en WON/LOSE
         cerrado_el = None
+        stage = deal.get("STAGE_ID", "")
         close_str = deal.get("CLOSEDATE", "")
-        if close_str:
+        if close_str and stage in ("C90:WON", "C90:LOSE"):
             try:
                 cerrado_el = datetime.fromisoformat(
                     close_str.replace("T", " ").split("+")[0]
