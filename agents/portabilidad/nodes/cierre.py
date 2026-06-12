@@ -45,9 +45,9 @@ def _mensaje_contacto_asesor() -> str:
             "Tu CHIP lo recoges gratis en el CAC más cercano."
         )
     if dia == 5:  # sábado
-        if hora >= 14:
+        if hora >= 15:
             return (
-                "Ya está todo listo. La atención telefónica los sábados concluye a las 2:00 p.m., "
+                "Ya está todo listo. La atención telefónica los sábados concluye a las 3:00 p.m., "
                 "por lo que el próximo lunes a partir de las 9:00 a.m. un asesor de portabilidad "
                 "te contactará para continuar el proceso, incluyendo la generación de tu NIP.\n"
                 "Tu CHIP lo recoges gratis en el CAC más cercano."
