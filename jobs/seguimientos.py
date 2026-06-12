@@ -27,8 +27,10 @@ from integrations.whatsapp.client import WhatsAppClient
 
 STAGE_RESCATE1 = "C90:1"
 STAGE_RESCATE2 = "C90:2"
+STAGE_RESCATE3 = "C90:3"
 MIN_SILENCIO = 30        # minutos sin mensaje del usuario antes de enviar seguimiento
 MIN_RESCATE2 = 60        # minutos en C90:1 antes de enviar Rescate 2
+MIN_RESCATE3 = 60        # minutos en C90:2 antes de disparar llamada Vicidial
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +157,72 @@ async def _mover_a_rescate2(lead_id: int, deal_id: str) -> None:
         logger.info("bitrix_rescate2_actualizado", extra={"lead_id": lead_id, "deal_id": deal_id})
     except Exception as exc:
         logger.warning("bitrix_rescate2_error", extra={"lead_id": lead_id, "error": str(exc)})
+
+
+async def _mover_a_rescate3(lead_id: int, deal_id: str) -> None:
+    """Mueve el deal a Rescate 3 (C90:3) en Bitrix y actualiza leads.bitrix_stage."""
+    try:
+        from integrations.bitrix.client import BitrixClient
+        bx = BitrixClient()
+        await bx.mover_etapa(deal_id, STAGE_RESCATE3)
+        await db.execute(
+            "UPDATE leads SET bitrix_stage = $1, updated_at = NOW() WHERE id = $2",
+            STAGE_RESCATE3, lead_id,
+        )
+        logger.info("bitrix_rescate3_actualizado", extra={"lead_id": lead_id, "deal_id": deal_id})
+    except Exception as exc:
+        logger.warning("bitrix_rescate3_error", extra={"lead_id": lead_id, "error": str(exc)})
+
+
+async def _procesar_rescate3(row: dict) -> None:
+    """Dispara llamada Vicidial a leads en C90:2 con 60+ min desde el Rescate 2."""
+    lead_id = row["id"]
+    phone = row["telefono"]
+    deal_id = row.get("bitrix_lead_id") or ""
+    ultimo_seguimiento = row.get("ultimo_seguimiento")
+
+    ahora = datetime.now(tz=TZ)
+    if not _en_ventana(ahora):
+        return
+
+    # Verificar silencio mínimo del usuario
+    minutos = await minutos_desde_ultimo_mensaje(phone)
+    if minutos is not None and minutos < MIN_SILENCIO:
+        logger.info("rescate3_skip_reciente", extra={"lead_id": lead_id, "minutos": round(minutos, 1)})
+        return
+
+    # Verificar que han pasado 60 min desde el Rescate 2
+    if not ultimo_seguimiento:
+        return
+    mins_desde_rescate2 = (ahora - ultimo_seguimiento.astimezone(TZ)).total_seconds() / 60
+    if mins_desde_rescate2 < MIN_RESCATE3:
+        logger.info("rescate3_skip_espera", extra={"lead_id": lead_id, "mins_desde_rescate2": round(mins_desde_rescate2, 1)})
+        return
+
+    ya_enviado = await db.fetchval(
+        "SELECT COUNT(*) FROM seguimientos_log WHERE lead_id = $1 AND etapa = $2 AND enviado_at > NOW() - INTERVAL '4 minutes'",
+        lead_id, STAGE_RESCATE3,
+    )
+    if ya_enviado:
+        return
+
+    from integrations.vicidial.client import agregar_lead
+    exito, respuesta = await agregar_lead(phone)
+
+    if exito and deal_id:
+        await _mover_a_rescate3(lead_id, deal_id)
+
+    await db.execute(
+        "INSERT INTO seguimientos_log (lead_id, etapa, numero_seq, enviado_at) VALUES ($1, $2, 1, NOW())",
+        lead_id, STAGE_RESCATE3,
+    )
+    await db.execute(
+        "UPDATE leads SET seguimientos_enviados = seguimientos_enviados + 1, ultimo_seguimiento = NOW(), updated_at = NOW() WHERE id = $1",
+        lead_id,
+    )
+
+    if not exito:
+        logger.error("rescate3_vicidial_fallido", extra={"lead_id": lead_id, "respuesta": respuesta})
 
 
 async def _enviar_seguimiento(lead_id: int, phone: str, bitrix_stage: str, numero_seq: int) -> None:
@@ -366,13 +434,37 @@ async def job_seguimientos() -> None:
             errores += 1
             logger.error("job_rescate2_error", extra={"lead_id": row["id"], "error": str(exc)})
 
+    # ── Rescate 3: leads en C90:2 con 60+ min → llamada Vicidial ─────────────
+    try:
+        leads_r3 = await db.fetch(
+            """
+            SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento
+            FROM leads
+            WHERE bitrix_stage = 'C90:2'
+              AND updated_at > NOW() - INTERVAL '30 days'
+            ORDER BY updated_at DESC
+            LIMIT 200
+            """
+        )
+    except Exception as exc:
+        logger.error("job_rescate3_db_error", extra={"error": str(exc)})
+        leads_r3 = []
+
+    for row in leads_r3:
+        try:
+            await _procesar_rescate3(dict(row))
+            procesados += 1
+        except Exception as exc:
+            errores += 1
+            logger.error("job_rescate3_error", extra={"lead_id": row["id"], "error": str(exc)})
+
     duracion_ms = round((datetime.now(tz=TZ) - inicio).total_seconds() * 1000)
     logger.info(
         "job_seguimientos_done",
         extra={"procesados": procesados, "errores": errores, "duracion_ms": duracion_ms},
     )
-    if not leads:
-        logger.warning("job_seguimientos_sin_leads")
+    if not leads_r1 and not leads_r2 and not leads_r3:
+        logger.info("job_seguimientos_sin_leads")
 
 
 def create_scheduler() -> AsyncIOScheduler:

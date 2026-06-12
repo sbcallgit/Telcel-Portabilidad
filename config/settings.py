@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # Admin
     admin_token: str = "changeme"
 
+    # Vicidial — marcador predictivo (tercer seguimiento)
+    vicidial_url: str = "http://189.209.207.222/vicidial/non_agent_api.php"
+    vicidial_user: str = "api_n8n"
+    vicidial_pass: str = "key2-Fit"
+    vicidial_list_id: str = "101"
+    vicidial_campaign_id: str = "n8n_port"
+
     # App
     app_version: str = "1.0.0"
     environment: str = "development"

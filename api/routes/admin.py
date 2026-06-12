@@ -23,6 +23,10 @@ class SeguimientoTestRequest(BaseModel):
     force: bool = False  # True = ignora la ventana de 30 min (solo para pruebas)
 
 
+class VicidialTestRequest(BaseModel):
+    telefono: str
+
+
 @router.post("/kpi-export")
 async def trigger_kpi_export(x_admin_token: str = Header(...)) -> JSONResponse:
     """Dispara el job de exportación de KPIs de forma inmediata.
@@ -129,4 +133,26 @@ async def trigger_seguimiento_test(
         "bitrix_movido_a": bitrix_movido_a if deal_id else "sin_deal_id",
         "mensaje_numero": num_enviados + 1,
         "minutos_desde_ultimo_mensaje": minutos_str,
+    })
+
+
+@router.post("/vicidial-test")
+async def trigger_vicidial_test(
+    body: VicidialTestRequest,
+    x_admin_token: str = Header(...),
+) -> JSONResponse:
+    """Envía un lead directamente a Vicidial para validar la integración."""
+    _check_token(x_admin_token)
+
+    from integrations.vicidial.client import agregar_lead
+
+    telefono = body.telefono.strip()
+    logger.info("admin_vicidial_test", extra={"phone_tail": telefono[-4:]})
+
+    exito, respuesta = await agregar_lead(telefono)
+
+    return JSONResponse({
+        "status": "ok" if exito else "error",
+        "telefono": f"***{telefono[-4:]}",
+        "vicidial_response": respuesta,
     })
