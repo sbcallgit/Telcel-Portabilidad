@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+from config.settings import settings
 from integrations.postgres import client as db
 from integrations.telegram.client import TelegramClient
 from integrations.whatsapp.client import WhatsAppClient
@@ -461,10 +462,12 @@ async def job_seguimientos() -> None:
         logger.info("job_seguimientos_fuera_ventana")
         return
 
+    test_phone = settings.seguimientos_test_phone.strip()
+    filtro_sql = "AND telefono = $2" if test_phone else ""
+
     # ── Rescate 1: leads fuera de WON, Rescate 1 y Rescate 2 ─────────────────
     try:
-        leads_r1 = await db.fetch(
-            """
+        query_r1 = f"""
             SELECT id, telefono, bitrix_stage, bitrix_lead_id,
                    COALESCE(seguimientos_enviados, 0) AS seguimientos_enviados,
                    ultimo_seguimiento, created_at,
@@ -474,11 +477,11 @@ async def job_seguimientos() -> None:
               AND bitrix_stage != ''
               AND COALESCE(seguimientos_enviados, 0) < $1
               AND updated_at > NOW() - INTERVAL '30 days'
+              {filtro_sql}
             ORDER BY updated_at DESC
             LIMIT 200
-            """,
-            MAX_SEGUIMIENTOS,
-        )
+            """
+        leads_r1 = await db.fetch(query_r1, MAX_SEGUIMIENTOS, *([test_phone] if test_phone else []))
     except Exception as exc:
         logger.error("job_seguimientos_db_error", extra={"error": str(exc)})
         return
@@ -495,17 +498,17 @@ async def job_seguimientos() -> None:
 
     # ── Rescate 2: leads en C90:1 con 60+ min desde el primer rescate ────────
     try:
-        leads_r2 = await db.fetch(
-            """
+        query_r2 = f"""
             SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento,
                    nombre, compania_donante, recarga_habitual, promo_elegida, temperatura, municipio
             FROM leads
             WHERE bitrix_stage = 'C90:1'
               AND updated_at > NOW() - INTERVAL '30 days'
+              {filtro_sql.replace('$2', '$1') if test_phone else ''}
             ORDER BY updated_at DESC
             LIMIT 200
             """
-        )
+        leads_r2 = await db.fetch(query_r2, *([test_phone] if test_phone else []))
     except Exception as exc:
         logger.error("job_rescate2_db_error", extra={"error": str(exc)})
         leads_r2 = []
@@ -520,16 +523,16 @@ async def job_seguimientos() -> None:
 
     # ── Rescate 3: leads en C90:2 con 60+ min → llamada Vicidial ─────────────
     try:
-        leads_r3 = await db.fetch(
-            """
+        query_r3 = f"""
             SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento
             FROM leads
             WHERE bitrix_stage = 'C90:2'
               AND updated_at > NOW() - INTERVAL '30 days'
+              {filtro_sql.replace('$2', '$1') if test_phone else ''}
             ORDER BY updated_at DESC
             LIMIT 200
             """
-        )
+        leads_r3 = await db.fetch(query_r3, *([test_phone] if test_phone else []))
     except Exception as exc:
         logger.error("job_rescate3_db_error", extra={"error": str(exc)})
         leads_r3 = []
@@ -556,17 +559,17 @@ def create_scheduler() -> AsyncIOScheduler:
     from jobs.kpi_export import job_kpi_export
 
     scheduler = AsyncIOScheduler(timezone=TZ)
-    # job_seguimientos desactivado hasta validar con teléfono de prueba en producción.
-    # Para habilitar: descomentar el bloque y hacer rebuild.
-    # scheduler.add_job(
-    #     job_seguimientos,
-    #     trigger="interval",
-    #     minutes=5,
-    #     id="seguimientos",
-    #     max_instances=1,
-    #     coalesce=True,
-    #     misfire_grace_time=60,
-    # )
+    # Modo test: SEGUIMIENTOS_TEST_PHONE en .env limita el job a un solo teléfono.
+    # Para producción general: dejar SEGUIMIENTOS_TEST_PHONE vacío.
+    scheduler.add_job(
+        job_seguimientos,
+        trigger="interval",
+        minutes=5,
+        id="seguimientos",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=60,
+    )
     scheduler.add_job(
         job_bitrix_sync,
         trigger="interval",

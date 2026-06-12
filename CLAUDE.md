@@ -349,7 +349,8 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **Promos:** configuración versionada en tabla `promos`. Cuando Telcel publique nuevas, actualizar `load_promos.py` y correr `make seed`. NUNCA hardcodear precios en el agente.
 - **LADAs:** tabla técnica, no parte del guion. El bot la consulta internamente para decidir si continúa el flujo o deriva a CAC.
 - **Versiones de prompt:** editar los archivos en `prompts/` directamente. Para historial de versiones usar git. La carpeta `knowledge/prompts/` es para specs de auditoría, no para los prompts activos.
-- **APScheduler:** corre dentro del proceso FastAPI (lifespan). Jobs activos: `bitrix_sync` (cada 30 min) y `kpi_export` (cron 3am Monterrey). `job_seguimientos` está **comentado/desactivado** — habilitar solo tras validar con teléfono de prueba. El scheduler se inicia en `api/main.py` con `create_scheduler().start()` y se apaga con `scheduler.shutdown(wait=False)`.
+- **APScheduler:** corre dentro del proceso FastAPI (lifespan). Jobs activos: `bitrix_sync` (cada 30 min), `kpi_export` (cron 3am Monterrey) y `job_seguimientos` (cada 5 min, L-S 9am–9pm). El scheduler se inicia en `api/main.py` con `create_scheduler().start()` y se apaga con `scheduler.shutdown(wait=False)`.
+- **`SEGUIMIENTOS_TEST_PHONE`:** cuando está definido en `.env`, `job_seguimientos` solo procesa ese teléfono (modo validación). Para producción general dejar vacío (`SEGUIMIENTOS_TEST_PHONE=`) y hacer rebuild. Actualmente activo con el teléfono de prueba `593991053639`.
 - **Jobs timezone:** siempre `America/Monterrey` explícito. El horario de portabilidad es L-S 9am–9pm; sin domingos.
 - **Debounce:** configurar `DEBOUNCE_WINDOW_MS` en `.env`. Valor actual en producción: `10000` ms (10s). Poner `0` solo en pruebas unitarias o entornos donde cada mensaje debe procesarse de forma independiente.
 - **Telegram:** canal de pruebas que corre el mismo agente y el mismo debounce que WhatsApp. El `thread_id` de LangGraph es `str(chat_id)` en Telegram y `phone` en WhatsApp. El `phone` en Telegram tiene prefijo `tg_` (ej. `tg_8211184685`).
@@ -430,7 +431,7 @@ Solo se envía a leads con `bitrix_stage = 'C90:2'` (Rescate 2 ya enviado).
 | Job | Archivo | Frecuencia | Estado |
 |---|---|---|---|
 | `job_bitrix_sync` | `jobs/bitrix_sync.py` | Cada 30 min | **Activo** |
-| `job_seguimientos` | `jobs/seguimientos.py` | Cada 5 min, L-S 9am–9pm | **Desactivado** (pending validación) |
+| `job_seguimientos` | `jobs/seguimientos.py` | Cada 5 min, L-S 9am–9pm | **Activo** (modo test — solo `SEGUIMIENTOS_TEST_PHONE`) |
 
 ### Trigger manual para validación
 
