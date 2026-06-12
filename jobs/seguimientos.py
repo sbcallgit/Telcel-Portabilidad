@@ -175,7 +175,10 @@ async def _mover_a_rescate3(lead_id: int, deal_id: str) -> None:
 
 
 async def _procesar_rescate3(row: dict) -> None:
-    """Dispara llamada Vicidial a leads en C90:2 con 60+ min desde el Rescate 2."""
+    """Dispara llamada Vicidial a leads en C90:2 con 60+ min desde el Rescate 2.
+
+    El timer corre desde que se envió el Rescate 2 (entrada a C90:2), no desde el último mensaje.
+    """
     lead_id = row["id"]
     phone = row["telefono"]
     deal_id = row.get("bitrix_lead_id") or ""
@@ -185,13 +188,7 @@ async def _procesar_rescate3(row: dict) -> None:
     if not _en_ventana(ahora):
         return
 
-    # Verificar silencio mínimo del usuario
-    minutos = await minutos_desde_ultimo_mensaje(phone)
-    if minutos is not None and minutos < MIN_SILENCIO:
-        logger.info("rescate3_skip_reciente", extra={"lead_id": lead_id, "minutos": round(minutos, 1)})
-        return
-
-    # Verificar que han pasado 60 min desde el Rescate 2
+    # Timer: 60 min desde que entró a C90:2 (cuando se envió Rescate 2)
     if not ultimo_seguimiento:
         return
     mins_desde_rescate2 = (ahora - ultimo_seguimiento.astimezone(TZ)).total_seconds() / 60
@@ -309,7 +306,10 @@ async def _procesar_lead(row: dict) -> None:
 
 
 async def _procesar_rescate2(row: dict) -> None:
-    """Envía el mensaje de Rescate 2 a un lead en C90:1 si han pasado 60 min desde el Rescate 1."""
+    """Envía el mensaje de Rescate 2 a un lead en C90:1 si han pasado 60 min desde el Rescate 1.
+
+    El timer corre desde que se envió el Rescate 1 (entrada a C90:1), no desde el último mensaje.
+    """
     lead_id = row["id"]
     phone = row["telefono"]
     deal_id = row.get("bitrix_lead_id") or ""
@@ -319,13 +319,7 @@ async def _procesar_rescate2(row: dict) -> None:
     if not _en_ventana(ahora):
         return
 
-    # Verificar silencio mínimo del usuario
-    minutos = await minutos_desde_ultimo_mensaje(phone)
-    if minutos is not None and minutos < MIN_SILENCIO:
-        logger.info("rescate2_skip_reciente", extra={"lead_id": lead_id, "minutos": round(minutos, 1)})
-        return
-
-    # Verificar que han pasado 60 min desde el mensaje de Rescate 1
+    # Timer: 60 min desde que entró a C90:1 (cuando se envió Rescate 1)
     if not ultimo_seguimiento:
         return
     mins_desde_rescate1 = (ahora - ultimo_seguimiento.astimezone(TZ)).total_seconds() / 60
