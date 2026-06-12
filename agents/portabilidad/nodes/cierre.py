@@ -11,10 +11,81 @@ pero no bloquean el escalamiento al asesor.
 
 import logging
 import re
+from datetime import datetime
+
+import pytz
 
 from langchain_core.messages import AIMessage
 
 from agents.portabilidad.state import PortabilidadState
+
+_TZ = pytz.timezone("America/Monterrey")
+
+
+def _mensaje_contacto_asesor() -> str:
+    """Retorna el mensaje de contacto según hora y día en Monterrey.
+
+    Domingo (cualquier hora)       → lunes a las 9:00 a.m.
+    Sábado 14:00–23:59             → lunes a las 9:00 a.m.
+    Sábado 00:01–08:59             → hoy sábado a las 9:00 a.m.
+    Sábado 09:00–13:59             → conexión inmediata.
+    Lun–Vie 21:00–23:59            → mañana a las 9:00 a.m.
+    Lun–Vie 00:01–08:59            → hoy a las 9:00 a.m.
+    Lun–Vie 09:00–20:59            → conexión inmediata.
+    """
+    ahora = datetime.now(tz=_TZ)
+    hora = ahora.hour
+    dia = ahora.weekday()  # 0=lun … 5=sab … 6=dom
+
+    if dia == 6:  # domingo
+        return (
+            "Ya está todo listo. Los domingos nuestros asesores no realizan llamadas, "
+            "por lo que mañana lunes a partir de las 9:00 a.m. un asesor de portabilidad "
+            "te contactará para continuar el proceso, incluyendo la generación de tu NIP.\n"
+            "Tu CHIP lo recoges gratis en el CAC más cercano."
+        )
+    if dia == 5:  # sábado
+        if hora >= 14:
+            return (
+                "Ya está todo listo. La atención telefónica los sábados concluye a las 2:00 p.m., "
+                "por lo que el próximo lunes a partir de las 9:00 a.m. un asesor de portabilidad "
+                "te contactará para continuar el proceso, incluyendo la generación de tu NIP.\n"
+                "Tu CHIP lo recoges gratis en el CAC más cercano."
+            )
+        if 0 < hora < 9:
+            return (
+                "Ya está todo listo. Nuestros asesores inician atención a las 9:00 a.m., "
+                "por lo que hoy mismo a esa hora un asesor de portabilidad te contactará "
+                "para continuar el proceso, incluyendo la generación de tu NIP.\n"
+                "Tu CHIP lo recoges gratis en el CAC más cercano."
+            )
+        # sábado 09:00–13:59 → atención normal
+        return (
+            "Te voy a conectar con un asesor de portabilidad que va a continuar el proceso "
+            "contigo, incluyendo la generación de tu NIP.\n"
+            "Solo tarda unos minutos y tu CHIP lo recoges gratis en el CAC."
+        )
+    # lunes a viernes
+    if hora >= 21:
+        return (
+            "Ya está todo listo. Como en este momento nuestros asesores ya concluyeron "
+            "su horario de atención, mañana en horario hábil (9:00 a.m. – 9:00 p.m.) "
+            "un asesor de portabilidad te contactará para continuar el proceso, "
+            "incluyendo la generación de tu NIP.\n"
+            "Tu CHIP lo recoges gratis en el CAC más cercano."
+        )
+    if 0 < hora < 9:
+        return (
+            "Ya está todo listo. Nuestros asesores inician atención a las 9:00 a.m., "
+            "por lo que hoy mismo a esa hora un asesor de portabilidad te contactará "
+            "para continuar el proceso, incluyendo la generación de tu NIP.\n"
+            "Tu CHIP lo recoges gratis en el CAC más cercano."
+        )
+    return (
+        "Te voy a conectar con un asesor de portabilidad que va a continuar el proceso "
+        "contigo, incluyendo la generación de tu NIP.\n"
+        "Solo tarda unos minutos y tu CHIP lo recoges gratis en el CAC."
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -164,14 +235,13 @@ async def cierre_node(state: PortabilidadState) -> dict:
     if pending is None:
         nombre = datos.get("nombre", "")
 
+        nombre_corto = nombre.split()[0] if nombre else ""
         resumen = (
-            f"¡Listo, {nombre.split()[0] if nombre else ''}! 🙌 Ya tengo todo lo que necesito.\n\n"
+            f"¡Listo, {nombre_corto}! 🙌 Ya tengo todo lo que necesito.\n\n"
             f"👤 Nombre: {datos.get('nombre')}\n"
             f"📱 Número a portar: {datos.get('numero_a_portar')}\n"
             f"📡 Compañía actual: {datos.get('compania_donante')}\n\n"
-            "Te voy a conectar con un asesor de portabilidad que va a continuar el proceso "
-            "contigo, incluyendo la generación de tu NIP.\n"
-            "Solo tarda unos minutos y tu CHIP lo recoges gratis en el CAC.\n\n"
+            f"{_mensaje_contacto_asesor()}\n\n"
             "¿Tienes alguna duda antes de pasarte con él?\n\n"
             f"{_AVISO_PRIVACIDAD}"
         )
