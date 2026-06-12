@@ -88,7 +88,9 @@ class BitrixClient:
                 "values": [telefono],
                 "entity_type": "CONTACT",
             })
-            contact_ids = dup.get("result", {}).get("CONTACT", [])
+            dup_result = dup.get("result", {})
+            # Bitrix retorna [] (lista) si no hay duplicados, {"CONTACT": [...]} si los hay
+            contact_ids = dup_result.get("CONTACT", []) if isinstance(dup_result, dict) else []
             if contact_ids:
                 contact_id = str(contact_ids[0])
                 logger.info("bitrix_contact_found", extra={"phone_tail": telefono[-4:], "contact_id": contact_id})
