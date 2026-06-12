@@ -108,18 +108,33 @@ class BitrixClient:
             return ""
 
     async def link_contact_to_deal(self, deal_id: str, telefono: str, nombre: str = "") -> None:
-        """Vincula un contacto (por teléfono) al deal si aún no tiene uno asignado.
+        """Vincula o actualiza el contacto del deal con el teléfono del cliente.
 
+        - Si el deal no tiene contacto: crea/busca uno y lo vincula.
+        - Si ya tiene contacto pero sin PHONE: actualiza el contacto con el teléfono.
         Seguro de llamar en background — silencia todos los errores.
         """
         try:
             deal = await self.get_deal(deal_id)
-            if deal.get("CONTACT_ID"):
+            contact_id = deal.get("CONTACT_ID")
+
+            if not contact_id:
+                # Sin contacto: crear/encontrar y vincular al deal
+                contact_id = await self._find_or_create_contact(telefono, nombre)
+                if contact_id:
+                    await self.actualizar_deal(deal_id, {"CONTACT_ID": contact_id})
+                    logger.info("bitrix_contact_linked", extra={"deal_id": deal_id, "contact_id": contact_id})
                 return
-            contact_id = await self._find_or_create_contact(telefono, nombre)
-            if contact_id:
-                await self.actualizar_deal(deal_id, {"CONTACT_ID": contact_id})
-                logger.info("bitrix_contact_linked", extra={"deal_id": deal_id, "contact_id": contact_id})
+
+            # Con contacto existente (creado por Open Lines): verificar que tenga PHONE
+            r = await self._call("crm.contact.get", {"id": contact_id})
+            existing_phone = r.get("result", {}).get("PHONE")
+            if not existing_phone:
+                await self._call("crm.contact.update", {
+                    "id": contact_id,
+                    "fields": {"PHONE": [{"VALUE": telefono, "VALUE_TYPE": "WORK"}]},
+                })
+                logger.info("bitrix_contact_phone_updated", extra={"deal_id": deal_id, "contact_id": contact_id, "phone_tail": telefono[-4:]})
         except Exception as exc:
             logger.warning("bitrix_link_contact_error", extra={"deal_id": deal_id, "error": str(exc)})
 
