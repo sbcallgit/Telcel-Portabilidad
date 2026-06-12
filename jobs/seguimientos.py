@@ -311,6 +311,12 @@ async def _enviar_seguimiento(lead_id: int, phone: str, texto: str, bitrix_stage
     else:
         await _wa.send_message(phone, texto)
         logger.info("seguimiento_enviado_whatsapp", extra={"lead_id": lead_id, "seq": numero_seq, "stage": bitrix_stage})
+        # Espeja el mensaje en el chat de Open Lines para que el asesor vea el rescate
+        try:
+            from integrations.bitrix.connector import send_bot_message
+            await send_bot_message(phone, texto)
+        except Exception as exc:
+            logger.warning("seguimiento_bitrix_mirror_error", extra={"lead_id": lead_id, "error": str(exc)})
 
 
 async def _procesar_lead(row: dict) -> None:
