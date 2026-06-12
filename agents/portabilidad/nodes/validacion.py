@@ -170,7 +170,7 @@ async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
             deal_id = await bx.buscar_deal_por_telefono(phone)
 
         if not deal_id:
-            # Fallback: crear deal si Bitrix no lo creó automáticamente
+            # Fallback: crear deal si Bitrix no lo creó automáticamente (también crea/vincula contacto)
             result = await bx.crear_deal(
                 telefono=phone,
                 datos={"COMMENTS": "Primer contacto vía WhatsApp/Telegram"},
@@ -178,6 +178,10 @@ async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
             )
             deal_id = str(result.get("result", ""))
             logger.info("bitrix_deal_creado_fallback", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
+        else:
+            # Deal existente (Open Lines) — vincular contacto en background si aún no tiene uno
+            import asyncio
+            asyncio.create_task(bx.link_contact_to_deal(deal_id, phone))
 
         if deal_id:
             return {"bitrix_lead_id": deal_id, "bitrix_etapa": "ia_porta"}

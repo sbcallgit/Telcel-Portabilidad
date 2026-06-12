@@ -77,10 +77,59 @@ class BitrixClient:
 
         return ""
 
+    async def _find_or_create_contact(self, telefono: str, nombre: str = "") -> str:
+        """Busca un contacto por teléfono (crm.duplicate.findbycomm) o crea uno nuevo.
+
+        Retorna el contact_id como string, o '' si ocurre algún error.
+        """
+        try:
+            dup = await self._call("crm.duplicate.findbycomm", {
+                "type": "PHONE",
+                "values": [telefono],
+                "entity_type": "CONTACT",
+            })
+            contact_ids = dup.get("result", {}).get("CONTACT", [])
+            if contact_ids:
+                contact_id = str(contact_ids[0])
+                logger.info("bitrix_contact_found", extra={"phone_tail": telefono[-4:], "contact_id": contact_id})
+                return contact_id
+
+            fields = {
+                "NAME": nombre or f"WA *{telefono[-4:]}",
+                "PHONE": [{"VALUE": telefono, "VALUE_TYPE": "WORK"}],
+                "SOURCE_ID": "WEB",
+            }
+            result = await self._call("crm.contact.add", {"fields": fields})
+            contact_id = str(result.get("result", ""))
+            logger.info("bitrix_contact_created", extra={"phone_tail": telefono[-4:], "contact_id": contact_id})
+            return contact_id
+        except Exception as exc:
+            logger.warning("bitrix_contact_error", extra={"phone_tail": telefono[-4:], "error": str(exc)})
+            return ""
+
+    async def link_contact_to_deal(self, deal_id: str, telefono: str, nombre: str = "") -> None:
+        """Vincula un contacto (por teléfono) al deal si aún no tiene uno asignado.
+
+        Seguro de llamar en background — silencia todos los errores.
+        """
+        try:
+            deal = await self.get_deal(deal_id)
+            if deal.get("CONTACT_ID"):
+                return
+            contact_id = await self._find_or_create_contact(telefono, nombre)
+            if contact_id:
+                await self.actualizar_deal(deal_id, {"CONTACT_ID": contact_id})
+                logger.info("bitrix_contact_linked", extra={"deal_id": deal_id, "contact_id": contact_id})
+        except Exception as exc:
+            logger.warning("bitrix_link_contact_error", extra={"deal_id": deal_id, "error": str(exc)})
+
     async def crear_deal(self, telefono: str, datos: dict, stage_id: str | None = None) -> dict:
         """Crea un deal en el pipeline de portabilidad (category_id = BITRIX_PIPELINE_ID)."""
         nombre = datos.get("NAME", "")
         titulo = f"Portabilidad {nombre} *{telefono[-4:]}" if nombre else f"Portabilidad *{telefono[-4:]}"
+
+        contact_id = await self._find_or_create_contact(telefono, nombre)
+
         fields = {
             "TITLE": titulo,
             "CATEGORY_ID": settings.bitrix_pipeline_id,
@@ -90,8 +139,11 @@ class BitrixClient:
                 + datos.get("COMMENTS", "")
             ),
         }
+        if contact_id:
+            fields["CONTACT_ID"] = contact_id
+
         result = await self._call("crm.deal.add", {"fields": fields})
-        logger.info("bitrix_deal_created", extra={"phone_tail": telefono[-4:]})
+        logger.info("bitrix_deal_created", extra={"phone_tail": telefono[-4:], "contact_id": contact_id})
         return result
 
     async def actualizar_deal(self, deal_id: str, datos: dict) -> dict:
