@@ -222,41 +222,69 @@ async def _procesar_rescate3(row: dict) -> None:
         logger.error("rescate3_vicidial_fallido", extra={"lead_id": lead_id, "respuesta": respuesta})
 
 
+async def _get_historial(phone: str) -> str:
+    """Extrae el historial de conversación desde LangGraph checkpoints.
+
+    Retorna un transcript 'Cliente: ...\nVera: ...' listo para inyectar en el prompt.
+    Limita a los últimos 20 mensajes para no exceder el contexto.
+    """
+    try:
+        from langchain_core.messages import AIMessage, HumanMessage
+        from agents.portabilidad.graph import get_agent_graph
+
+        snapshot = await get_agent_graph().aget_state(
+            {"configurable": {"thread_id": phone}}
+        )
+        if not snapshot or not snapshot.values:
+            return ""
+
+        messages = snapshot.values.get("messages") or []
+        lineas: list[str] = []
+        for m in messages[-20:]:
+            content = str(m.content).strip()
+            if not content:
+                continue
+            if isinstance(m, HumanMessage):
+                lineas.append(f"Cliente: {content}")
+            elif isinstance(m, AIMessage):
+                lineas.append(f"Vera: {content}")
+        return "\n".join(lineas)
+    except Exception as exc:
+        logger.warning("historial_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+        return ""
+
+
 async def _generar_mensaje_rescate(lead: dict, rescate: int) -> str:
-    """Genera un mensaje de seguimiento personalizado con LLM. Fallback a template estático."""
+    """Genera un mensaje de seguimiento personalizado con LLM basado en el historial real.
+
+    Lee la conversación desde LangGraph checkpoints; fallback a template estático.
+    """
     from agents.llm import get_llm
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    nombre = lead.get("nombre") or ""
-    compania = lead.get("compania_donante") or ""
-    recarga = lead.get("recarga_habitual") or ""
-    promo = lead.get("promo_elegida") or ""
-    temperatura = lead.get("temperatura") or ""
+    phone = lead.get("telefono", "")
+    historial = await _get_historial(phone)
 
-    partes = []
-    if nombre:
-        partes.append(f"Nombre: {nombre}.")
-    if compania:
-        partes.append(f"Compañía actual: {compania}.")
-    if recarga:
-        partes.append(f"Recarga habitual: ${recarga}.")
-    if promo:
-        partes.append(f"Promo que le corresponde: {promo}.")
-    if temperatura:
-        partes.append(f"Temperatura del lead: {temperatura}.")
-    contexto = " ".join(partes) if partes else "Sin datos adicionales del lead."
+    if historial:
+        contexto = f"Historial de la conversación:\n{historial}"
+    else:
+        contexto = "No hay historial disponible — el cliente no llegó a iniciar conversación."
 
-    urgencia = "Es el primer recordatorio — tono cálido y cercano." if rescate == 1 else \
-               "Es el segundo recordatorio — muestra un poco más de urgencia sin ser agresivo."
+    urgencia = (
+        "Es el primer recordatorio — tono cálido y cercano, sin presionar."
+        if rescate == 1
+        else "Es el segundo recordatorio — muestra un poco más de urgencia sin ser agresivo."
+    )
 
     system = (
         "Eres Vera, asesora de ventas de Telcel Región 4. "
         "Escribe un mensaje de seguimiento de WhatsApp para recuperar a este lead de portabilidad. "
         f"{urgencia} "
         "Reglas: máximo 2 oraciones, sin markdown, máximo 1 emoji, "
-        "usa el nombre si lo tienes, menciona la promo o beneficio si lo tienes, "
-        "no menciones que es un recordatorio automático ni que el lead no ha respondido. "
-        f"Contexto del lead: {contexto}"
+        "usa el nombre del cliente si aparece en el historial, "
+        "haz referencia natural a lo que se habló (promo, recarga, objeción) si hay historial, "
+        "no menciones que es un recordatorio automático ni que el lead no respondió. "
+        f"\n\n{contexto}"
     )
 
     try:
@@ -266,7 +294,7 @@ async def _generar_mensaje_rescate(lead: dict, rescate: int) -> str:
             HumanMessage(content="Genera el mensaje."),
         ])
         texto = resp.content.strip()
-        logger.info("llm_mensaje_generado", extra={"lead_id": lead.get("id"), "rescate": rescate})
+        logger.info("llm_mensaje_generado", extra={"lead_id": lead.get("id"), "rescate": rescate, "con_historial": bool(historial)})
         return texto
     except Exception as exc:
         logger.warning("llm_mensaje_fallback", extra={"lead_id": lead.get("id"), "error": str(exc)})

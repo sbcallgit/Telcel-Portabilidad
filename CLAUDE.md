@@ -392,6 +392,19 @@ lead en C90:2
                                           → leads: bitrix_stage = 'C90:3'
 ```
 
+### Mensajes personalizados con LLM (Rescate 1 y 2)
+
+`_generar_mensaje_rescate(lead, rescate)` en `jobs/seguimientos.py` genera el texto de cada mensaje de seguimiento usando Claude con el historial real de la conversación como contexto.
+
+**Fuente de contexto:** `_get_historial(phone)` llama `get_agent_graph().aget_state()` con `thread_id = phone` y extrae los últimos 20 mensajes (`HumanMessage` / `AIMessage`) en formato `Cliente: ... / Vera: ...`. Esto permite personalizar el mensaje con lo que el cliente mencionó (objeción, recarga, nombre, promo) aunque no haya completado el flujo.
+
+- Si hay historial: el LLM referencia naturalmente lo que se habló ("la promo de $200 que platicamos").
+- Si no hay historial (lead sin conversación): genera un mensaje genérico de portabilidad.
+- Si el LLM falla: fallback automático al template estático de `_MENSAJES`.
+- Log `llm_mensaje_generado` incluye campo `con_historial: true/false` para auditoría.
+
+**Rescate 1:** tono cálido y cercano. **Rescate 2:** un poco más de urgencia, sin ser agresivo. Rescate 3 no envía mensaje — solo dispara la llamada Vicidial.
+
 ### Fuente de verdad y sincronización
 
 - **`leads.bitrix_stage`** — columna local sincronizada desde Bitrix por `job_bitrix_sync` (cada 30 min, máx 1 000 leads)
