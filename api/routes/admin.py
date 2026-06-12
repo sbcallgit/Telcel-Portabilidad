@@ -25,6 +25,7 @@ class SeguimientoTestRequest(BaseModel):
 
 class VicidialTestRequest(BaseModel):
     telefono: str
+    simulate: bool = False  # True = omite llamada real, simula éxito y mueve a C90:3
 
 
 @router.post("/kpi-export")
@@ -141,18 +142,47 @@ async def trigger_vicidial_test(
     body: VicidialTestRequest,
     x_admin_token: str = Header(...),
 ) -> JSONResponse:
-    """Envía un lead directamente a Vicidial para validar la integración."""
+    """Envía un lead a Vicidial y mueve el deal a C90:3.
+
+    simulate=true: omite la llamada real a Vicidial, simula éxito y ejecuta
+    todo el flujo (mover deal a C90:3, actualizar leads y seguimientos_log).
+    """
     _check_token(x_admin_token)
 
+    from integrations.postgres import client as db
     from integrations.vicidial.client import agregar_lead
+    from jobs.seguimientos import STAGE_RESCATE3, _mover_a_rescate3
 
     telefono = body.telefono.strip()
-    logger.info("admin_vicidial_test", extra={"phone_tail": telefono[-4:]})
+    logger.info("admin_vicidial_test", extra={"phone_tail": telefono[-4:], "simulate": body.simulate})
 
-    exito, respuesta = await agregar_lead(telefono)
+    if body.simulate:
+        exito, respuesta = True, "simulated"
+    else:
+        exito, respuesta = await agregar_lead(telefono)
+
+    bitrix_movido_a = None
+    if exito:
+        row = await db.fetchrow(
+            "SELECT id, bitrix_lead_id, bitrix_stage FROM leads WHERE telefono = $1",
+            telefono,
+        )
+        if row and row["bitrix_lead_id"]:
+            await _mover_a_rescate3(row["id"], row["bitrix_lead_id"])
+            await db.execute(
+                "INSERT INTO seguimientos_log (lead_id, etapa, numero_seq, enviado_at) VALUES ($1, $2, 1, NOW())",
+                row["id"], STAGE_RESCATE3,
+            )
+            await db.execute(
+                "UPDATE leads SET seguimientos_enviados = seguimientos_enviados + 1, ultimo_seguimiento = NOW(), updated_at = NOW() WHERE id = $1",
+                row["id"],
+            )
+            bitrix_movido_a = STAGE_RESCATE3
 
     return JSONResponse({
         "status": "ok" if exito else "error",
         "telefono": f"***{telefono[-4:]}",
+        "simulate": body.simulate,
         "vicidial_response": respuesta,
+        "bitrix_movido_a": bitrix_movido_a,
     })

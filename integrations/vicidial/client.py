@@ -18,7 +18,7 @@ async def agregar_lead(phone: str) -> tuple[bool, str]:
     phone_local = phone[-10:] if len(phone) > 10 else phone
 
     params = {
-        "vendor_lead_code": phone_local,
+        "vendor_lead_code": "test",
         "source": "n8n",
         "user": settings.vicidial_user,
         "pass": settings.vicidial_pass,
@@ -29,7 +29,7 @@ async def agregar_lead(phone: str) -> tuple[bool, str]:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True, verify=False) as client:
             r = await client.get(settings.vicidial_url, params=params)
             r.raise_for_status()
             texto = r.text.strip()

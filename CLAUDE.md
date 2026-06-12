@@ -65,6 +65,8 @@ bot_telcel_portabilidad/
 │   │   └── handlers.py      # parse_update() — extrae chat_id, text, phone
 │   ├── postgres/
 │   │   └── client.py        # Pool asyncpg — execute/fetch/fetchrow parametrizados
+│   ├── vicidial/
+│   │   └── client.py        # agregar_lead() — GET a non_agent_api.php (Rescate 3)
 │   └── qdrant/
 │       └── client.py        # RAG semántico — index_objeciones(), search_objection()
 │
@@ -74,14 +76,14 @@ bot_telcel_portabilidad/
 │       ├── health.py        # GET /health — status ok/degraded + check de DB
 │       ├── webhooks.py      # POST/GET /webhooks/telcel — entry point de WhatsApp
 │       ├── telegram.py      # POST /webhooks/telegram — entry point de Telegram (pruebas)
-│       └── admin.py         # POST /admin/kpi-export — trigger manual KPIs; POST /admin/seguimiento-test — validar seguimientos (X-Admin-Token)
+│       └── admin.py         # POST /admin/kpi-export; POST /admin/seguimiento-test; POST /admin/vicidial-test (X-Admin-Token)
 │
 ├── db/                      # Capa de datos
 │   ├── models.py            # Modelos Pydantic: Lead, Lada, Promo, CAC, Objecion
 │   └── migrations.py        # DDL CREATE TABLE para todas las tablas
 │
 ├── jobs/                    # Tareas programadas
-│   ├── seguimientos.py      # Rescate 1 y 2 — mensajes de seguimiento automático (APScheduler, desactivado pending validación)
+│   ├── seguimientos.py      # Rescate 1, 2 y 3 — seguimientos automáticos (APScheduler, desactivado pending validación)
 │   ├── bitrix_sync.py       # Sincroniza leads.bitrix_stage desde Bitrix cada 30 min (APScheduler, activo)
 │   └── connector_poll.py    # Polling cada 30s: reenvía mensajes del asesor al usuario
 │
@@ -151,7 +153,12 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `QDRANT_URL` | URL del servidor Qdrant (default: `http://qdrant:6333`) |
 | `QDRANT_API_KEY` | API key de Qdrant (obligatoria en producción) |
 | `QDRANT_EMBEDDING_MODEL` | Modelo fastembed local (default: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`) |
-| `ADMIN_TOKEN` | Token para el endpoint `POST /admin/kpi-export` (header `X-Admin-Token`). Default `changeme` — cambiar en producción. |
+| `ADMIN_TOKEN` | Token para endpoints admin (header `X-Admin-Token`). Default `changeme` — cambiar en producción. |
+| `VICIDIAL_URL` | URL de la API Vicidial (default: `http://189.209.207.222/vicidial/non_agent_api.php`) |
+| `VICIDIAL_USER` | Usuario API Vicidial (default: `api_n8n`) |
+| `VICIDIAL_PASS` | Contraseña API Vicidial |
+| `VICIDIAL_LIST_ID` | ID de lista en Vicidial (default: `101`) |
+| `VICIDIAL_CAMPAIGN_ID` | ID de campaña en Vicidial (default: `n8n_port`) |
 
 ---
 
@@ -168,6 +175,7 @@ El pipeline usa `crm.deal.*` con `CATEGORY_ID=90`. Las etapas siguen el formato 
 | Venta | `C90:WON` | Solo leads con Venta Exitosa | Manual por el asesor |
 | Rescate 1 | `C90:1` | Primer seguimiento enviado | `job_seguimientos` tras 30 min de silencio del usuario |
 | Rescate 2 | `C90:2` | Segundo seguimiento enviado | `job_seguimientos` 60 min después de Rescate 1 (solo a `C90:1`) |
+| Rescate 3 | `C90:3` | Llamada automática vía Vicidial | `job_seguimientos` 60 min después de Rescate 2 (solo a `C90:2`) |
 | Recuperación | `C90:8` | Lead a reactivar | Regla automática Bitrix (24h sin avance) |
 | Caído | `C90:LOSE` | Lead perdido (con tipificación) | Manual por el asesor |
 
@@ -362,7 +370,7 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 ### Flujo Rescate
 
 ```
-lead activo (any stage excepto C90:WON / C90:1 / C90:2)
+lead activo (any stage excepto C90:WON / C90:1 / C90:2 / C90:3)
   │  usuario sin actividad ≥ 30 min (MAX checkpoint ts)
   ▼
 [job_seguimientos] → _procesar_lead() → WhatsApp: mensaje Rescate 1
@@ -375,6 +383,13 @@ lead en C90:1
 [job_seguimientos] → _procesar_rescate2() → WhatsApp: mensaje Rescate 2
                                           → Bitrix: mover deal a C90:2
                                           → leads: bitrix_stage = 'C90:2'
+
+lead en C90:2
+  │  usuario sin actividad ≥ 30 min Y ≥ 60 min desde Rescate 2
+  ▼
+[job_seguimientos] → _procesar_rescate3() → Vicidial: GET non_agent_api.php (add_lead)
+                                          → Bitrix: mover deal a C90:3
+                                          → leads: bitrix_stage = 'C90:3'
 ```
 
 ### Fuente de verdad y sincronización
@@ -386,11 +401,15 @@ lead en C90:1
 
 ### Exclusiones de Rescate 1
 
-No se envía Rescate 1 a deals cuyo `bitrix_stage` esté en: `C90:WON`, `C90:1`, `C90:2`.
+No se envía Rescate 1 a deals cuyo `bitrix_stage` esté en: `C90:WON`, `C90:1`, `C90:2`, `C90:3`.
 
 ### Exclusiones de Rescate 2
 
 Solo se envía a leads con `bitrix_stage = 'C90:1'` (Rescate 1 ya enviado).
+
+### Exclusiones de Rescate 3
+
+Solo se envía a leads con `bitrix_stage = 'C90:2'` (Rescate 2 ya enviado).
 
 ### Jobs relacionados
 
@@ -413,6 +432,19 @@ curl -X POST https://portabilidad.callcomcc.io/admin/seguimiento-test \
 ```
 
 `force: true` omite la ventana de 30 min de silencio (solo para pruebas). Si el lead tiene `bitrix_stage = 'C90:1'`, el endpoint detecta automáticamente y ejecuta flujo Rescate 2.
+
+```bash
+# Rescate 3 — llamada Vicidial (simulate=true omite la llamada real)
+curl -X POST https://portabilidad.callcomcc.io/admin/vicidial-test \
+  -H "X-Admin-Token: <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"telefono": "521XXXXXXXXXX", "simulate": true}'
+
+# Respuesta exitosa: {"status": "ok", "simulate": true,
+#   "vicidial_response": "simulated", "bitrix_movido_a": "C90:3"}
+```
+
+**Nota Vicidial:** el servidor redirige HTTP→HTTPS (307) con certificado SSL de IP inválido — el cliente usa `follow_redirects=True, verify=False`. El 403 en producción indica que la IP del servidor no está en la whitelist de Vicidial — pendiente configuración en el servidor Vicidial. Usar `simulate=true` mientras tanto.
 
 ### Upsert de leads en nodos del agente
 
