@@ -74,14 +74,15 @@ bot_telcel_portabilidad/
 │       ├── health.py        # GET /health — status ok/degraded + check de DB
 │       ├── webhooks.py      # POST/GET /webhooks/telcel — entry point de WhatsApp
 │       ├── telegram.py      # POST /webhooks/telegram — entry point de Telegram (pruebas)
-│       └── admin.py         # POST /admin/kpi-export — trigger manual del job de KPIs (X-Admin-Token)
+│       └── admin.py         # POST /admin/kpi-export — trigger manual KPIs; POST /admin/seguimiento-test — validar seguimientos (X-Admin-Token)
 │
 ├── db/                      # Capa de datos
 │   ├── models.py            # Modelos Pydantic: Lead, Lada, Promo, CAC, Objecion
 │   └── migrations.py        # DDL CREATE TABLE para todas las tablas
 │
 ├── jobs/                    # Tareas programadas
-│   ├── seguimientos.py      # Cadencia de seguimientos automáticos (APScheduler)
+│   ├── seguimientos.py      # Rescate 1 y 2 — mensajes de seguimiento automático (APScheduler, desactivado pending validación)
+│   ├── bitrix_sync.py       # Sincroniza leads.bitrix_stage desde Bitrix cada 30 min (APScheduler, activo)
 │   └── connector_poll.py    # Polling cada 30s: reenvía mensajes del asesor al usuario
 │
 ├── knowledge/               # Base de conocimiento del bot
@@ -165,6 +166,8 @@ El pipeline usa `crm.deal.*` con `CATEGORY_ID=90`. Las etapas siguen el formato 
 | Seguimiento | `C90:SEGUIMIENTO` | Usuario quiere ser contactado después | Cuando el usuario expresa intención de continuar más adelante (`motivo: seguimiento, max_objeciones_alcanzado`) |
 | Escalamiento Humano | `C90:UC_8WB2DT` | Solicita asesor humano ahora | Solicitud directa, caso sensible, ARCO, Telcel→Telcel, cambio de titularidad (`escalate_node`) |
 | Venta | `C90:WON` | Solo leads con Venta Exitosa | Manual por el asesor |
+| Rescate 1 | `C90:1` | Primer seguimiento enviado | `job_seguimientos` tras 30 min de silencio del usuario |
+| Rescate 2 | `C90:2` | Segundo seguimiento enviado | `job_seguimientos` 60 min después de Rescate 1 (solo a `C90:1`) |
 | Recuperación | `C90:8` | Lead a reactivar | Regla automática Bitrix (24h sin avance) |
 | Caído | `C90:LOSE` | Lead perdido (con tipificación) | Manual por el asesor |
 
@@ -338,7 +341,7 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **Promos:** configuración versionada en tabla `promos`. Cuando Telcel publique nuevas, actualizar `load_promos.py` y correr `make seed`. NUNCA hardcodear precios en el agente.
 - **LADAs:** tabla técnica, no parte del guion. El bot la consulta internamente para decidir si continúa el flujo o deriva a CAC.
 - **Versiones de prompt:** editar los archivos en `prompts/` directamente. Para historial de versiones usar git. La carpeta `knowledge/prompts/` es para specs de auditoría, no para los prompts activos.
-- **APScheduler:** corre dentro del proceso FastAPI (lifespan). Dos jobs: `seguimientos` (cada 5 min, ventana L-S 9am–9pm) y `kpi_export` (cron 3am Monterrey). El scheduler se inicia en `api/main.py` con `create_scheduler().start()` y se apaga con `scheduler.shutdown(wait=False)`.
+- **APScheduler:** corre dentro del proceso FastAPI (lifespan). Jobs activos: `bitrix_sync` (cada 30 min) y `kpi_export` (cron 3am Monterrey). `job_seguimientos` está **comentado/desactivado** — habilitar solo tras validar con teléfono de prueba. El scheduler se inicia en `api/main.py` con `create_scheduler().start()` y se apaga con `scheduler.shutdown(wait=False)`.
 - **Jobs timezone:** siempre `America/Monterrey` explícito. El horario de portabilidad es L-S 9am–9pm; sin domingos.
 - **Debounce:** configurar `DEBOUNCE_WINDOW_MS` en `.env`. Valor actual en producción: `10000` ms (10s). Poner `0` solo en pruebas unitarias o entornos donde cada mensaje debe procesarse de forma independiente.
 - **Telegram:** canal de pruebas que corre el mismo agente y el mismo debounce que WhatsApp. El `thread_id` de LangGraph es `str(chat_id)` en Telegram y `phone` en WhatsApp. El `phone` en Telegram tiene prefijo `tg_` (ej. `tg_8211184685`).
@@ -352,6 +355,70 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **`escalate_node` sin mensajes:** el nodo solo actualiza Bitrix y el estado del agente. No agrega `AIMessage` — el mensaje de confirmación al usuario lo genera el nodo que llama a `escalate` (cierre, objeciones, etc.).
 - **Principio Anti-Rendición (`context.py`):** las constantes `ANTI_RENDICION` y `OBJECTIONS_HANDLING` se definen en `agents/portabilidad/context.py` y se inyectan en los prompts via `render_prompt()` como `{ANTI_RENDICION}`. Aplican en `sondeo`, `oferta`, `objeciones` y `validacion`. La regla central: ante un "no", silencio o respuesta fría, Vera no cierra — intenta entender la objeción real hasta 3 veces antes del cierre cálido. Excepción: rechazo explícito, molestia real o solicitud de asesor → respetar de inmediato sin reformular.
 - **`BitrixClient.get_deal(deal_id)`:** método nuevo en `integrations/bitrix/client.py` — llama `crm.deal.get` y retorna el dict del deal (STAGE_ID, ASSIGNED_BY_ID, SOURCE_ID, CLOSEDATE, CONTACT_ID). Usado por `job_kpi_export`.
+
+## Sistema de seguimientos automáticos (Rescate)
+
+### Flujo Rescate
+
+```
+lead activo (any stage excepto C90:WON / C90:1 / C90:2)
+  │  usuario sin actividad ≥ 30 min (MAX checkpoint ts)
+  ▼
+[job_seguimientos] → _procesar_lead() → WhatsApp: mensaje Rescate 1
+                                      → Bitrix: mover deal a C90:1
+                                      → leads: bitrix_stage = 'C90:1'
+
+lead en C90:1
+  │  usuario sin actividad ≥ 30 min Y ≥ 60 min desde Rescate 1
+  ▼
+[job_seguimientos] → _procesar_rescate2() → WhatsApp: mensaje Rescate 2
+                                          → Bitrix: mover deal a C90:2
+                                          → leads: bitrix_stage = 'C90:2'
+```
+
+### Fuente de verdad y sincronización
+
+- **`leads.bitrix_stage`** — columna local sincronizada desde Bitrix por `job_bitrix_sync` (cada 30 min, máx 1 000 leads)
+- **`minutos_desde_ultimo_mensaje(phone)`** — consulta `MAX(checkpoint->>'ts')` en tabla `checkpoints` (LangGraph) por `thread_id = phone`
+- **`leads.ultimo_seguimiento`** — timestamp del último seguimiento enviado; gate de 60 min para Rescate 2
+- **`leads.seguimientos_enviados`** — contador acumulado de mensajes de seguimiento
+
+### Exclusiones de Rescate 1
+
+No se envía Rescate 1 a deals cuyo `bitrix_stage` esté en: `C90:WON`, `C90:1`, `C90:2`.
+
+### Exclusiones de Rescate 2
+
+Solo se envía a leads con `bitrix_stage = 'C90:1'` (Rescate 1 ya enviado).
+
+### Jobs relacionados
+
+| Job | Archivo | Frecuencia | Estado |
+|---|---|---|---|
+| `job_bitrix_sync` | `jobs/bitrix_sync.py` | Cada 30 min | **Activo** |
+| `job_seguimientos` | `jobs/seguimientos.py` | Cada 5 min, L-S 9am–9pm | **Desactivado** (pending validación) |
+
+### Trigger manual para validación
+
+```bash
+# Rescate 1 (detecta stage automáticamente)
+curl -X POST https://portabilidad.callcomcc.io/admin/seguimiento-test \
+  -H "X-Admin-Token: <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"telefono": "521XXXXXXXXXX", "force": true}'
+
+# Respuesta exitosa: {"status": "enviado", "flujo": "rescate1|rescate2",
+#   "bitrix_stage_anterior": "C90:NEW", "bitrix_movido_a": "C90:1", ...}
+```
+
+`force: true` omite la ventana de 30 min de silencio (solo para pruebas). Si el lead tiene `bitrix_stage = 'C90:1'`, el endpoint detecta automáticamente y ejecuta flujo Rescate 2.
+
+### Upsert de leads en nodos del agente
+
+- **`validacion_node`** (`_upsert_lead`): inserta la fila en `leads` cuando la LADA es válida y habilitada. `ON CONFLICT (telefono) DO UPDATE` — no sobreescribe `bitrix_lead_id` si ya existe.
+- **`escalate_node`** (`_upsert_lead_kpis`): actualiza la fila con KPIs completos (nombre, número a portar, compañía, municipio, recarga, temperatura, promo) y `etapa = 'escalado'`.
+
+---
 
 ## Exportación de KPIs para BI
 

@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from config.settings import settings
 
@@ -15,6 +16,11 @@ logger = logging.getLogger(__name__)
 def _check_token(x_admin_token: str) -> None:
     if x_admin_token != settings.admin_token:
         raise HTTPException(status_code=403, detail="forbidden")
+
+
+class SeguimientoTestRequest(BaseModel):
+    telefono: str
+    force: bool = False  # True = ignora la ventana de 30 min (solo para pruebas)
 
 
 @router.post("/kpi-export")
@@ -32,3 +38,95 @@ async def trigger_kpi_export(x_admin_token: str = Header(...)) -> JSONResponse:
     asyncio.create_task(job_kpi_export())
 
     return JSONResponse({"status": "started", "message": "KPI export corriendo en background — revisa logs para progreso"})
+
+
+@router.post("/seguimiento-test")
+async def trigger_seguimiento_test(
+    body: SeguimientoTestRequest,
+    x_admin_token: str = Header(...),
+) -> JSONResponse:
+    """Envía un seguimiento manual a un teléfono específico para validar antes de habilitar el job.
+
+    Busca el lead en la BD por teléfono y dispara _enviar_seguimiento con el stage actual.
+    Si el lead no existe, retorna 404.
+    """
+    _check_token(x_admin_token)
+
+    from integrations.postgres import client as db
+    from jobs.seguimientos import (
+        STAGE_RESCATE1, STAGE_RESCATE2,
+        _enviar_seguimiento, _mover_a_rescate1, _mover_a_rescate2,
+        minutos_desde_ultimo_mensaje,
+    )
+
+    telefono = body.telefono.strip()
+    row = await db.fetchrow(
+        """SELECT id, telefono, bitrix_stage, bitrix_lead_id,
+                  COALESCE(seguimientos_enviados, 0) AS num,
+                  ultimo_seguimiento
+           FROM leads WHERE telefono = $1""",
+        telefono,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Lead no encontrado para teléfono {telefono}")
+
+    lead_id = row["id"]
+    bitrix_stage = row["bitrix_stage"] or "C90:NEW"
+    deal_id = row["bitrix_lead_id"] or ""
+    num_enviados = row["num"]
+    es_rescate2 = bitrix_stage == STAGE_RESCATE1
+
+    # Verificar ventana de silencio de 30 min
+    minutos = await minutos_desde_ultimo_mensaje(telefono)
+    minutos_str = round(minutos, 1) if minutos is not None else None
+
+    if not body.force and minutos is not None and minutos < 30:
+        return JSONResponse({
+            "status": "bloqueado",
+            "motivo": "usuario_activo_reciente",
+            "minutos_desde_ultimo_mensaje": minutos_str,
+            "minutos_requeridos": 30,
+            "tip": "Usa force=true para ignorar la ventana en pruebas",
+        })
+
+    flujo = "rescate2" if es_rescate2 else "rescate1"
+    logger.info("admin_seguimiento_test", extra={"telefono": telefono[-4:], "stage": bitrix_stage, "flujo": flujo, "force": body.force})
+
+    try:
+        if es_rescate2:
+            # Flujo Rescate 2: lead ya está en C90:1 → enviar mensaje y mover a C90:2
+            await _enviar_seguimiento(lead_id, telefono, STAGE_RESCATE1, 0)
+            if deal_id:
+                await _mover_a_rescate2(lead_id, deal_id)
+            await db.execute(
+                "INSERT INTO seguimientos_log (lead_id, etapa, numero_seq, enviado_at) VALUES ($1, $2, 1, NOW())",
+                lead_id, STAGE_RESCATE2,
+            )
+            bitrix_movido_a = STAGE_RESCATE2
+        else:
+            # Flujo Rescate 1: mover a C90:1
+            await _enviar_seguimiento(lead_id, telefono, bitrix_stage, num_enviados)
+            if deal_id:
+                await _mover_a_rescate1(lead_id, deal_id)
+            await db.execute(
+                "INSERT INTO seguimientos_log (lead_id, etapa, numero_seq, enviado_at) VALUES ($1, $2, $3, NOW())",
+                lead_id, bitrix_stage, num_enviados + 1,
+            )
+            bitrix_movido_a = STAGE_RESCATE1
+
+        await db.execute(
+            "UPDATE leads SET seguimientos_enviados = seguimientos_enviados + 1, ultimo_seguimiento = NOW(), updated_at = NOW() WHERE id = $1",
+            lead_id,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return JSONResponse({
+        "status": "enviado",
+        "flujo": flujo,
+        "telefono": f"***{telefono[-4:]}",
+        "bitrix_stage_anterior": bitrix_stage,
+        "bitrix_movido_a": bitrix_movido_a if deal_id else "sin_deal_id",
+        "mensaje_numero": num_enviados + 1,
+        "minutos_desde_ultimo_mensaje": minutos_str,
+    })

@@ -125,6 +125,26 @@ def _format_cacs(cacs: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+async def _upsert_lead(phone: str, deal_id: str) -> None:
+    """Crea o actualiza el registro en leads cuando se confirma el teléfono del cliente."""
+    try:
+        await db.execute(
+            """
+            INSERT INTO leads (telefono, bitrix_lead_id, etapa)
+            VALUES ($1, $2, 'sondeo')
+            ON CONFLICT (telefono) DO UPDATE SET
+                bitrix_lead_id = CASE
+                    WHEN leads.bitrix_lead_id = '' THEN EXCLUDED.bitrix_lead_id
+                    ELSE leads.bitrix_lead_id
+                END,
+                updated_at = NOW()
+            """,
+            phone, deal_id,
+        )
+    except Exception as exc:
+        logger.warning("upsert_lead_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+
+
 async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
     """Asocia el deal de Bitrix al primer mensaje: busca el deal existente (creado por el
     imconnector al abrir el chat) y solo crea uno nuevo si no se encuentra ninguno."""
@@ -332,6 +352,8 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
             }
 
         if lada_info["habilitada"]:
+            deal_id = state.get("bitrix_lead_id") or ""
+            await _upsert_lead(numero, deal_id)
             return {
                 "messages": [AIMessage(content=(
                     f"¡Listo! Tu zona ({lada_info['ciudad']}, {lada_info['estado']}) "

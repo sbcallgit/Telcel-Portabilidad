@@ -1,10 +1,18 @@
 """Seguimientos automáticos de leads — APScheduler con zona horaria America/Monterrey.
 
-Cadencias por etapa:
-  - No respondió / en sondeo / recibió oferta / intención alta:  5m · 30m · 2h · antes de 24h
-  - "Lo voy a pensar":                                            30m · 2h · antes de 24h · día 2
+Fuente de verdad: leads.bitrix_stage (sincronizado desde Bitrix por job_bitrix_sync).
+Se envía seguimiento a todos los leads EXCEPTO los que están en C90:WON (venta cerrada).
+
+Cadencias por stage de Bitrix (minutos):
+  C90:NEW          30m · 2h · 23h
+  C90:PROSPECTO    4h · 23h · 46h
+  C90:SEGUIMIENTO  2h · 23h · 46h · 69h
+  C90:UC_8WB2DT    4h · 23h · 46h
+  C90:8            23h · 46h · 69h
+  C90:LOSE         46h · 92h
+
+Ventana: L–S 9:00–21:00 America/Monterrey. Sin domingos.
 Límite: máximo 5 seguimientos por lead.
-Ventana permitida: L-S 9:00–21:00 America/Monterrey. Sin domingos.
 """
 
 import logging
@@ -17,17 +25,63 @@ from integrations.postgres import client as db
 from integrations.telegram.client import TelegramClient
 from integrations.whatsapp.client import WhatsAppClient
 
+STAGE_RESCATE1 = "C90:1"
+STAGE_RESCATE2 = "C90:2"
+MIN_SILENCIO = 30        # minutos sin mensaje del usuario antes de enviar seguimiento
+MIN_RESCATE2 = 60        # minutos en C90:1 antes de enviar Rescate 2
+
 logger = logging.getLogger(__name__)
 
 TZ = pytz.timezone("America/Monterrey")
 MAX_SEGUIMIENTOS = 5
-VENTANA_INICIO = 9   # hora local
-VENTANA_FIN = 21     # hora local (exclusivo)
+VENTANA_INICIO = 9
+VENTANA_FIN = 21
 
-# Cadencias en minutos por tipo de etapa
 _CADENCIAS: dict[str, list[int]] = {
-    "default":   [5, 30, 120, 1380],   # 5m · 30m · 2h · 23h
-    "tibio":     [30, 120, 1380, 2880], # 30m · 2h · 23h · 48h
+    "C90:NEW":        [30, 120, 1380],
+    "C90:PROSPECTO":  [240, 1380, 2760],
+    "C90:SEGUIMIENTO":[120, 1380, 2760, 4140],
+    "C90:UC_8WB2DT":  [240, 1380, 2760],
+    "C90:8":          [1380, 2760, 4140],
+    "C90:LOSE":       [2760, 5520],
+}
+_CADENCIA_DEFAULT = [30, 120, 1380]
+
+_MENSAJES: dict[str, list[str]] = {
+    "C90:NEW": [
+        "Hola, soy Vera de Telcel 😊 ¿Pudiste pensarlo? La promo de portabilidad sigue vigente.",
+        "¿Te quedó alguna duda sobre los beneficios? Aquí estoy para ayudarte con tu portabilidad.",
+        "Último recordatorio: la promo está disponible por tiempo limitado. ¿Te ayudo a avanzar? 🙌",
+    ],
+    "C90:PROSPECTO": [
+        "Hola, soy Vera de Telcel 😊 Tienes un asesor asignado que te contactará pronto para coordinar tu portabilidad. ¿Necesitas algo mientras tanto?",
+        "¿Ya te contactó tu asesor de Telcel? Si no ha sido así, dime y lo verificamos.",
+        "Recuerda que tu promo sigue reservada. ¿Ya avanzaste con el asesor? 🙌",
+    ],
+    "C90:SEGUIMIENTO": [
+        "Hola, soy Vera de Telcel 😊 Quedamos en contactarte más adelante. ¿Ya es buen momento para avanzar con tu portabilidad?",
+        "La promo de portabilidad sigue vigente. ¿Hoy puedes avanzar? Solo toma unos minutos 🙌",
+        "¿Sigues interesado en portarte a Telcel conservando tu número? La promo sigue disponible.",
+        "Última vez que te escribo por ahora — cuando estés listo, aquí estaré 😊",
+    ],
+    "C90:UC_8WB2DT": [
+        "Hola, soy Vera de Telcel 😊 Tienes un asesor asignado que te contactará en breve para seguir con tu portabilidad.",
+        "¿Ya te marcó tu asesor de Telcel? Estamos pendientes de ti. Si necesitas algo, aquí estoy.",
+        "Recuerda que tu solicitud de portabilidad sigue activa. Tu asesor te contactará pronto 🙌",
+    ],
+    "C90:8": [
+        "Hola, soy Vera de Telcel 😊 ¿Sigues interesado en portarte conservando tu mismo número? La promo sigue disponible.",
+        "¿Pudiste pensarlo? Con tu misma recarga tendrías mucho más con Telcel 🙌 ¿Te platico?",
+        "Última vez que te escribo — si en algún momento quieres aprovechar la promo, aquí estaré.",
+    ],
+    "C90:LOSE": [
+        "Hola, soy Vera de Telcel 😊 Sé que antes no pudimos avanzar, pero la promo de portabilidad sigue vigente. ¿Hay algo en lo que pueda ayudarte?",
+        "Última oportunidad: la promo de portabilidad sigue disponible. Si cambias de opinión, aquí estoy 🙌",
+    ],
+    # Mensaje Rescate 2 — se envía a leads que ya están en C90:1
+    "C90:1": [
+        "Hola, soy Vera de Telcel 😊 Solo quería asegurarme de que no te quedaste con ninguna duda sobre tu portabilidad. La promo sigue vigente — ¿te ayudo a avanzar?",
+    ],
 }
 
 _tg = TelegramClient()
@@ -35,93 +89,108 @@ _wa = WhatsAppClient()
 
 
 def _en_ventana(ahora: datetime) -> bool:
-    """Verifica que la hora local esté en la ventana permitida y no sea domingo."""
     local = ahora.astimezone(TZ)
-    if local.weekday() == 6:  # domingo
+    if local.weekday() == 6:
         return False
     return VENTANA_INICIO <= local.hour < VENTANA_FIN
 
 
-def _cadencia(etapa: str, temperatura: str) -> list[int]:
-    if temperatura == "tibio" and etapa in ("oferta", "objecion"):
-        return _CADENCIAS["tibio"]
-    return _CADENCIAS["default"]
+def _cadencia(bitrix_stage: str) -> list[int]:
+    return _CADENCIAS.get(bitrix_stage, _CADENCIA_DEFAULT)
 
 
 def _siguiente_envio(ultimo: datetime, cadencia: list[int], num_enviados: int) -> datetime | None:
-    """Calcula la próxima ventana de envío. Retorna None si ya se agotó la cadencia."""
     if num_enviados >= len(cadencia) or num_enviados >= MAX_SEGUIMIENTOS:
         return None
-    delta = timedelta(minutes=cadencia[num_enviados])
-    return ultimo + delta
+    return ultimo + timedelta(minutes=cadencia[num_enviados])
 
 
-async def _enviar_seguimiento(lead_id: int, phone: str, etapa: str, numero_seq: int) -> None:
-    """Genera y envía el mensaje de seguimiento adecuado para la etapa."""
-    mensajes: dict[str, list[str]] = {
-        "sondeo": [
-            "Hola, soy Alejandro de Telcel. ¿Pudiste pensarlo? Tenemos promos vigentes para tu zona.",
-            "¿Te quedó alguna duda sobre la portabilidad? Aquí estoy para ayudarte.",
-            "Último recordatorio: las promos de portabilidad están disponibles por tiempo limitado. ¿Te platico?",
-            "Solo para avisarte que aún puedes aprovechar la promo. ¿Te ayudo a avanzar?",
-        ],
-        "oferta": [
-            "¡Hola! ¿Pudiste pensar la promo que te compartí? Sigue vigente.",
-            "¿Te quedó alguna duda sobre los beneficios? Con gusto los repaso contigo.",
-            "La promo tiene fecha límite. ¿Seguimos con el proceso?",
-            "¿Te ayudo a resolver cualquier duda antes de que expire la oferta?",
-        ],
-        "objecion": [
-            "Hola, ¿ya tuviste oportunidad de pensarlo? La promo sigue disponible.",
-            "Si te quedó alguna duda sobre el costo o los beneficios, con gusto te aclaro.",
-            "Recuerda: la portabilidad no tiene costo y tu número no cambia. ¿Seguimos?",
-            "Última vez que te escribo por esta promo — si te interesa aún está vigente.",
-        ],
-        "default": [
-            "Hola, soy Alejandro de Telcel. ¿Puedo ayudarte con tu portabilidad?",
-            "¿Tuviste oportunidad de revisar la promo que te mandé?",
-            "La promoción de portabilidad sigue vigente. ¿Te ayudo a avanzar?",
-            "¿Tienes alguna duda sobre el proceso? Aquí estoy.",
-        ],
-    }
+def _mensaje(bitrix_stage: str, numero_seq: int) -> str:
+    lista = _MENSAJES.get(bitrix_stage, _MENSAJES["C90:NEW"])
+    return lista[min(numero_seq, len(lista) - 1)]
 
-    lista = mensajes.get(etapa, mensajes["default"])
-    texto = lista[min(numero_seq, len(lista) - 1)]
 
-    # Intentar enviar por Telegram si el phone empieza con tg_
+async def minutos_desde_ultimo_mensaje(phone: str) -> float | None:
+    """Retorna los minutos transcurridos desde el último checkpoint del usuario.
+
+    Usa la tabla checkpoints de LangGraph con thread_id = phone.
+    Retorna None si no hay checkpoints (lead sin conversación previa).
+    """
+    row = await db.fetchrow(
+        "SELECT MAX((checkpoint->>'ts')::timestamptz) AS ts FROM checkpoints WHERE thread_id = $1",
+        phone,
+    )
+    if not row or not row["ts"]:
+        return None
+    ahora = datetime.now(tz=TZ)
+    delta = ahora - row["ts"].astimezone(TZ)
+    return delta.total_seconds() / 60
+
+
+async def _mover_a_rescate1(lead_id: int, deal_id: str) -> None:
+    """Mueve el deal a Rescate 1 (C90:1) en Bitrix y actualiza leads.bitrix_stage."""
+    try:
+        from integrations.bitrix.client import BitrixClient
+        bx = BitrixClient()
+        await bx.mover_etapa(deal_id, STAGE_RESCATE1)
+        await db.execute(
+            "UPDATE leads SET bitrix_stage = $1, updated_at = NOW() WHERE id = $2",
+            STAGE_RESCATE1, lead_id,
+        )
+        logger.info("bitrix_rescate1_actualizado", extra={"lead_id": lead_id, "deal_id": deal_id})
+    except Exception as exc:
+        logger.warning("bitrix_rescate1_error", extra={"lead_id": lead_id, "error": str(exc)})
+
+
+async def _mover_a_rescate2(lead_id: int, deal_id: str) -> None:
+    """Mueve el deal a Rescate 2 (C90:2) en Bitrix y actualiza leads.bitrix_stage."""
+    try:
+        from integrations.bitrix.client import BitrixClient
+        bx = BitrixClient()
+        await bx.mover_etapa(deal_id, STAGE_RESCATE2)
+        await db.execute(
+            "UPDATE leads SET bitrix_stage = $1, updated_at = NOW() WHERE id = $2",
+            STAGE_RESCATE2, lead_id,
+        )
+        logger.info("bitrix_rescate2_actualizado", extra={"lead_id": lead_id, "deal_id": deal_id})
+    except Exception as exc:
+        logger.warning("bitrix_rescate2_error", extra={"lead_id": lead_id, "error": str(exc)})
+
+
+async def _enviar_seguimiento(lead_id: int, phone: str, bitrix_stage: str, numero_seq: int) -> None:
+    texto = _mensaje(bitrix_stage, numero_seq)
     if phone.startswith("tg_"):
         chat_id = phone.replace("tg_", "")
-        try:
-            await _tg.send_message(chat_id, texto)
-            logger.info("seguimiento_enviado_telegram", extra={"lead_id": lead_id, "seq": numero_seq})
-        except Exception as exc:
-            logger.error("seguimiento_telegram_error", extra={"lead_id": lead_id, "error": str(exc)})
-            raise
+        await _tg.send_message(chat_id, texto)
+        logger.info("seguimiento_enviado_telegram", extra={"lead_id": lead_id, "seq": numero_seq, "stage": bitrix_stage})
     else:
         await _wa.send_message(phone, texto)
-        logger.info("seguimiento_enviado_whatsapp", extra={"lead_id": lead_id, "seq": numero_seq})
+        logger.info("seguimiento_enviado_whatsapp", extra={"lead_id": lead_id, "seq": numero_seq, "stage": bitrix_stage})
 
 
 async def _procesar_lead(row: dict) -> None:
     lead_id = row["id"]
     phone = row["telefono"]
-    etapa = row["etapa"]
-    temperatura = row["temperatura"] or "frio"
+    bitrix_stage = row["bitrix_stage"] or ""
+    deal_id = row.get("bitrix_lead_id") or ""
     num_enviados = row["seguimientos_enviados"] or 0
     ultimo_raw = row["ultimo_seguimiento"] or row["created_at"]
 
     ahora = datetime.now(tz=TZ)
-
     if not _en_ventana(ahora):
         return
 
-    cadencia = _cadencia(etapa, temperatura)
-    proximo = _siguiente_envio(ultimo_raw, cadencia, num_enviados)
+    # Verificar que el usuario lleva al menos 30 min sin escribir
+    minutos = await minutos_desde_ultimo_mensaje(phone)
+    if minutos is not None and minutos < MIN_SILENCIO:
+        logger.info("seguimiento_skip_reciente", extra={"lead_id": lead_id, "minutos": round(minutos, 1)})
+        return
 
+    cadencia = _cadencia(bitrix_stage)
+    proximo = _siguiente_envio(ultimo_raw, cadencia, num_enviados)
     if proximo is None or ahora < proximo.astimezone(TZ):
         return
 
-    # Idempotencia: verificar que no se envió ya en los últimos 4 minutos
     ya_enviado = await db.fetchval(
         "SELECT COUNT(*) FROM seguimientos_log WHERE lead_id = $1 AND enviado_at > NOW() - INTERVAL '4 minutes'",
         lead_id,
@@ -131,18 +200,19 @@ async def _procesar_lead(row: dict) -> None:
         return
 
     try:
-        await _enviar_seguimiento(lead_id, phone, etapa, num_enviados)
+        await _enviar_seguimiento(lead_id, phone, bitrix_stage, num_enviados)
 
-        # Registrar en log
+        # Primer seguimiento → mover deal a Rescate 1 en Bitrix
+        if num_enviados == 0 and deal_id:
+            await _mover_a_rescate1(lead_id, deal_id)
+
         await db.execute(
             """
             INSERT INTO seguimientos_log (lead_id, etapa, numero_seq, enviado_at)
             VALUES ($1, $2, $3, NOW())
             """,
-            lead_id, etapa, num_enviados + 1,
+            lead_id, bitrix_stage, num_enviados + 1,
         )
-
-        # Actualizar contador en lead
         await db.execute(
             """
             UPDATE leads
@@ -170,8 +240,70 @@ async def _procesar_lead(row: dict) -> None:
         )
 
 
+async def _procesar_rescate2(row: dict) -> None:
+    """Envía el mensaje de Rescate 2 a un lead en C90:1 si han pasado 60 min desde el Rescate 1."""
+    lead_id = row["id"]
+    phone = row["telefono"]
+    deal_id = row.get("bitrix_lead_id") or ""
+    ultimo_seguimiento = row.get("ultimo_seguimiento")
+
+    ahora = datetime.now(tz=TZ)
+    if not _en_ventana(ahora):
+        return
+
+    # Verificar silencio mínimo del usuario
+    minutos = await minutos_desde_ultimo_mensaje(phone)
+    if minutos is not None and minutos < MIN_SILENCIO:
+        logger.info("rescate2_skip_reciente", extra={"lead_id": lead_id, "minutos": round(minutos, 1)})
+        return
+
+    # Verificar que han pasado 60 min desde el mensaje de Rescate 1
+    if not ultimo_seguimiento:
+        return
+    mins_desde_rescate1 = (ahora - ultimo_seguimiento.astimezone(TZ)).total_seconds() / 60
+    if mins_desde_rescate1 < MIN_RESCATE2:
+        logger.info("rescate2_skip_espera", extra={"lead_id": lead_id, "mins_desde_rescate1": round(mins_desde_rescate1, 1)})
+        return
+
+    ya_enviado = await db.fetchval(
+        "SELECT COUNT(*) FROM seguimientos_log WHERE lead_id = $1 AND enviado_at > NOW() - INTERVAL '4 minutes'",
+        lead_id,
+    )
+    if ya_enviado:
+        return
+
+    try:
+        await _enviar_seguimiento(lead_id, phone, STAGE_RESCATE1, 0)
+
+        if deal_id:
+            await _mover_a_rescate2(lead_id, deal_id)
+
+        await db.execute(
+            "INSERT INTO seguimientos_log (lead_id, etapa, numero_seq, enviado_at) VALUES ($1, $2, 1, NOW())",
+            lead_id, STAGE_RESCATE2,
+        )
+        await db.execute(
+            "UPDATE leads SET seguimientos_enviados = seguimientos_enviados + 1, ultimo_seguimiento = NOW(), updated_at = NOW() WHERE id = $1",
+            lead_id,
+        )
+
+    except Exception as exc:
+        logger.error("rescate2_fallido", extra={"lead_id": lead_id, "error": str(exc)})
+        await db.execute(
+            """
+            INSERT INTO seguimientos_fallidos (lead_id, error, intentos, ultimo_intento)
+            VALUES ($1, $2, 1, NOW())
+            ON CONFLICT (lead_id) DO UPDATE
+              SET intentos = seguimientos_fallidos.intentos + 1,
+                  error = EXCLUDED.error,
+                  ultimo_intento = NOW(),
+                  requiere_revision = (seguimientos_fallidos.intentos + 1 >= 3)
+            """,
+            lead_id, str(exc),
+        )
+
+
 async def job_seguimientos() -> None:
-    """Job principal: procesa todos los leads activos que necesitan seguimiento."""
     inicio = datetime.now(tz=TZ)
     logger.info("job_seguimientos_start", extra={"hora": inicio.isoformat()})
 
@@ -179,16 +311,18 @@ async def job_seguimientos() -> None:
         logger.info("job_seguimientos_fuera_ventana")
         return
 
+    # ── Rescate 1: leads fuera de WON, Rescate 1 y Rescate 2 ─────────────────
     try:
-        leads = await db.fetch(
+        leads_r1 = await db.fetch(
             """
-            SELECT id, telefono, etapa, temperatura,
+            SELECT id, telefono, bitrix_stage, bitrix_lead_id,
                    COALESCE(seguimientos_enviados, 0) AS seguimientos_enviados,
                    ultimo_seguimiento, created_at
             FROM leads
-            WHERE etapa NOT IN ('escalado', 'fin')
+            WHERE bitrix_stage NOT IN ('C90:WON', 'C90:1', 'C90:2')
+              AND bitrix_stage != ''
               AND COALESCE(seguimientos_enviados, 0) < $1
-              AND updated_at > NOW() - INTERVAL '3 days'
+              AND updated_at > NOW() - INTERVAL '30 days'
             ORDER BY updated_at DESC
             LIMIT 200
             """,
@@ -200,7 +334,7 @@ async def job_seguimientos() -> None:
 
     procesados = 0
     errores = 0
-    for row in leads:
+    for row in leads_r1:
         try:
             await _procesar_lead(dict(row))
             procesados += 1
@@ -208,28 +342,63 @@ async def job_seguimientos() -> None:
             errores += 1
             logger.error("job_lead_error", extra={"lead_id": row["id"], "error": str(exc)})
 
+    # ── Rescate 2: leads en C90:1 con 60+ min desde el primer rescate ────────
+    try:
+        leads_r2 = await db.fetch(
+            """
+            SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento
+            FROM leads
+            WHERE bitrix_stage = 'C90:1'
+              AND updated_at > NOW() - INTERVAL '30 days'
+            ORDER BY updated_at DESC
+            LIMIT 200
+            """
+        )
+    except Exception as exc:
+        logger.error("job_rescate2_db_error", extra={"error": str(exc)})
+        leads_r2 = []
+
+    for row in leads_r2:
+        try:
+            await _procesar_rescate2(dict(row))
+            procesados += 1
+        except Exception as exc:
+            errores += 1
+            logger.error("job_rescate2_error", extra={"lead_id": row["id"], "error": str(exc)})
+
     duracion_ms = round((datetime.now(tz=TZ) - inicio).total_seconds() * 1000)
     logger.info(
         "job_seguimientos_done",
         extra={"procesados": procesados, "errores": errores, "duracion_ms": duracion_ms},
     )
-    if procesados == 0 and not leads:
+    if not leads:
         logger.warning("job_seguimientos_sin_leads")
 
 
 def create_scheduler() -> AsyncIOScheduler:
-    """Crea y configura el scheduler: seguimientos (cada 5m) + kpi_export (3am)."""
+    from jobs.bitrix_sync import job_bitrix_sync
     from jobs.kpi_export import job_kpi_export
 
     scheduler = AsyncIOScheduler(timezone=TZ)
+    # job_seguimientos desactivado hasta validar con teléfono de prueba en producción.
+    # Para habilitar: descomentar el bloque y hacer rebuild.
+    # scheduler.add_job(
+    #     job_seguimientos,
+    #     trigger="interval",
+    #     minutes=5,
+    #     id="seguimientos",
+    #     max_instances=1,
+    #     coalesce=True,
+    #     misfire_grace_time=60,
+    # )
     scheduler.add_job(
-        job_seguimientos,
+        job_bitrix_sync,
         trigger="interval",
-        minutes=5,
-        id="seguimientos",
+        minutes=30,
+        id="bitrix_sync",
         max_instances=1,
         coalesce=True,
-        misfire_grace_time=60,
+        misfire_grace_time=120,
     )
     scheduler.add_job(
         job_kpi_export,

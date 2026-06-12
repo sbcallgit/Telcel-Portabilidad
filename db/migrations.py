@@ -146,4 +146,10 @@ ALTER TABLE kpi_conversaciones
   ADD COLUMN IF NOT EXISTS texto_agente  TEXT NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS texto_humano  TEXT NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS resumen       TEXT NOT NULL DEFAULT '';
+
+-- Seguimientos: stage de Bitrix en leads + unicidad de teléfono
+ALTER TABLE leads
+  ADD COLUMN IF NOT EXISTS bitrix_stage VARCHAR(50) NOT NULL DEFAULT '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS leads_telefono_uq ON leads(telefono);
 """

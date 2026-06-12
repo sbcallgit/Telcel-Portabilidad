@@ -15,6 +15,7 @@ def _build_context(state: PortabilidadState) -> dict:
         "numero_a_portar": datos.get("numero_a_portar", ""),
         "compania_donante": datos.get("compania_donante", ""),
         "municipio": datos.get("municipio", ""),
+        "recarga_habitual": datos.get("recarga_habitual", "0"),
         "promo_elegida": state.get("promo_elegida", ""),
         "temperatura": state.get("temperatura", ""),
         "motivo_escalacion": state.get("motivo_escalacion", ""),
@@ -43,6 +44,49 @@ def _resolve_stage(motivo: str) -> str:
     if motivo in _SEGUIMIENTO_MOTIVOS:
         return settings.bitrix_stage_seguimiento
     return settings.bitrix_stage_prospecto  # "cierre" y cualquier otro
+
+
+async def _upsert_lead_kpis(context: dict, phone: str, deal_id: str) -> None:
+    """Actualiza leads con KPIs completos tras el escalamiento."""
+    from integrations.postgres import client as db
+
+    datos = context
+    nombre = datos.get("nombre", "")
+    numero_a_portar = datos.get("numero_a_portar", "")
+    compania_donante = datos.get("compania_donante", "")
+    municipio = datos.get("municipio", "")
+    promo_elegida = datos.get("promo_elegida", "")
+    temperatura = datos.get("temperatura", "")
+    recarga_str = str(datos.get("recarga_habitual") or "0")
+    try:
+        recarga = int(recarga_str) if recarga_str.isdigit() else 0
+    except (ValueError, TypeError):
+        recarga = 0
+
+    try:
+        await db.execute(
+            """
+            INSERT INTO leads (telefono, nombre, numero_a_portar, compania_donante,
+                               municipio, recarga_habitual, temperatura, promo_elegida,
+                               bitrix_lead_id, etapa)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'escalado')
+            ON CONFLICT (telefono) DO UPDATE SET
+                nombre           = EXCLUDED.nombre,
+                numero_a_portar  = EXCLUDED.numero_a_portar,
+                compania_donante = EXCLUDED.compania_donante,
+                municipio        = EXCLUDED.municipio,
+                recarga_habitual = EXCLUDED.recarga_habitual,
+                temperatura      = EXCLUDED.temperatura,
+                promo_elegida    = EXCLUDED.promo_elegida,
+                bitrix_lead_id   = EXCLUDED.bitrix_lead_id,
+                etapa            = 'escalado',
+                updated_at       = NOW()
+            """,
+            phone, nombre, numero_a_portar, compania_donante,
+            municipio, recarga, temperatura, promo_elegida, deal_id,
+        )
+    except Exception as exc:
+        logger.warning("upsert_lead_kpis_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
 
 
 async def _try_bitrix(context: dict, phone: str, motivo: str, existing_deal_id: str = "") -> str:
@@ -101,6 +145,9 @@ async def escalate_node(state: PortabilidadState) -> dict:
 
     # Actualizar deal existente (creado al primer contacto) con stage según motivo
     deal_id = await _try_bitrix(context, phone, motivo=motivo, existing_deal_id=state.get("bitrix_lead_id") or "")
+
+    # Persistir KPIs en leads para el job de seguimientos
+    await _upsert_lead_kpis(context, phone, deal_id)
 
     logger.info(
         "escalation_done",

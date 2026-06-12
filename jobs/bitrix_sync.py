@@ -1,0 +1,83 @@
+"""Sincroniza el STAGE_ID de Bitrix24 hacia leads.bitrix_stage.
+
+Corre cada 30 minutos vía APScheduler.
+Lee todos los leads con bitrix_lead_id, consulta crm.deal.get en paralelo
+(concurrencia máx 5) y actualiza bitrix_stage en la BD local.
+"""
+
+import asyncio
+import logging
+from datetime import datetime
+
+import pytz
+
+from integrations.postgres import client as db
+
+logger = logging.getLogger(__name__)
+
+TZ = pytz.timezone("America/Monterrey")
+_CONCURRENCIA = 5
+
+
+async def _sync_deal(bx, lead_id: int, deal_id: str, semaphore: asyncio.Semaphore) -> tuple[int, str]:
+    async with semaphore:
+        try:
+            deal = await bx.get_deal(deal_id)
+            stage = deal.get("STAGE_ID", "")
+            return lead_id, stage
+        except Exception as exc:
+            logger.warning("bitrix_sync_deal_error", extra={"lead_id": lead_id, "deal_id": deal_id, "error": str(exc)})
+            return lead_id, ""
+
+
+async def job_bitrix_sync() -> None:
+    """Actualiza leads.bitrix_stage con el stage real de Bitrix para todos los leads activos."""
+    inicio = datetime.now(tz=TZ)
+    logger.info("job_bitrix_sync_start", extra={"hora": inicio.isoformat()})
+
+    try:
+        rows = await db.fetch(
+            """
+            SELECT id, bitrix_lead_id
+            FROM leads
+            WHERE bitrix_lead_id != ''
+            ORDER BY updated_at DESC
+            LIMIT 1000
+            """
+        )
+    except Exception as exc:
+        logger.error("job_bitrix_sync_db_error", extra={"error": str(exc)})
+        return
+
+    if not rows:
+        logger.info("job_bitrix_sync_sin_leads")
+        return
+
+    from integrations.bitrix.client import BitrixClient
+    bx = BitrixClient()
+    semaphore = asyncio.Semaphore(_CONCURRENCIA)
+
+    tareas = [_sync_deal(bx, row["id"], row["bitrix_lead_id"], semaphore) for row in rows]
+    resultados = await asyncio.gather(*tareas)
+
+    actualizados = 0
+    errores = 0
+    for lead_id, stage in resultados:
+        if not stage:
+            errores += 1
+            continue
+        try:
+            await db.execute(
+                "UPDATE leads SET bitrix_stage = $1, updated_at = NOW() WHERE id = $2 AND bitrix_stage != $1",
+                stage, lead_id,
+            )
+            actualizados += 1
+        except Exception as exc:
+            errores += 1
+            logger.warning("bitrix_sync_update_error", extra={"lead_id": lead_id, "error": str(exc)})
+
+    duracion_s = round((datetime.now(tz=TZ) - inicio).total_seconds(), 1)
+    logger.info(
+        "job_bitrix_sync_done",
+        extra={"total": len(rows), "actualizados": actualizados, "errores": errores, "duracion_s": duracion_s},
+    )
