@@ -60,7 +60,7 @@ async def trigger_seguimiento_test(
     from integrations.postgres import client as db
     from jobs.seguimientos import (
         STAGE_RESCATE1, STAGE_RESCATE2,
-        _enviar_seguimiento, _mover_a_rescate1, _mover_a_rescate2,
+        _enviar_seguimiento, _generar_mensaje_rescate, _mover_a_rescate1, _mover_a_rescate2,
         minutos_desde_ultimo_mensaje,
     )
 
@@ -68,7 +68,8 @@ async def trigger_seguimiento_test(
     row = await db.fetchrow(
         """SELECT id, telefono, bitrix_stage, bitrix_lead_id,
                   COALESCE(seguimientos_enviados, 0) AS num,
-                  ultimo_seguimiento
+                  ultimo_seguimiento,
+                  nombre, compania_donante, recarga_habitual, promo_elegida, temperatura, municipio
            FROM leads WHERE telefono = $1""",
         telefono,
     )
@@ -98,9 +99,11 @@ async def trigger_seguimiento_test(
     logger.info("admin_seguimiento_test", extra={"telefono": telefono[-4:], "stage": bitrix_stage, "flujo": flujo, "force": body.force})
 
     try:
+        lead_dict = dict(row)
         if es_rescate2:
             # Flujo Rescate 2: lead ya está en C90:1 → enviar mensaje y mover a C90:2
-            await _enviar_seguimiento(lead_id, telefono, STAGE_RESCATE1, 0)
+            texto = await _generar_mensaje_rescate(lead_dict, rescate=2)
+            await _enviar_seguimiento(lead_id, telefono, texto, STAGE_RESCATE1, 0)
             if deal_id:
                 await _mover_a_rescate2(lead_id, deal_id)
             await db.execute(
@@ -110,7 +113,8 @@ async def trigger_seguimiento_test(
             bitrix_movido_a = STAGE_RESCATE2
         else:
             # Flujo Rescate 1: mover a C90:1
-            await _enviar_seguimiento(lead_id, telefono, bitrix_stage, num_enviados)
+            texto = await _generar_mensaje_rescate(lead_dict, rescate=1)
+            await _enviar_seguimiento(lead_id, telefono, texto, bitrix_stage, num_enviados)
             if deal_id:
                 await _mover_a_rescate1(lead_id, deal_id)
             await db.execute(

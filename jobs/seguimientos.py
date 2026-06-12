@@ -222,8 +222,60 @@ async def _procesar_rescate3(row: dict) -> None:
         logger.error("rescate3_vicidial_fallido", extra={"lead_id": lead_id, "respuesta": respuesta})
 
 
-async def _enviar_seguimiento(lead_id: int, phone: str, bitrix_stage: str, numero_seq: int) -> None:
-    texto = _mensaje(bitrix_stage, numero_seq)
+async def _generar_mensaje_rescate(lead: dict, rescate: int) -> str:
+    """Genera un mensaje de seguimiento personalizado con LLM. Fallback a template estático."""
+    from agents.llm import get_llm
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    nombre = lead.get("nombre") or ""
+    compania = lead.get("compania_donante") or ""
+    recarga = lead.get("recarga_habitual") or ""
+    promo = lead.get("promo_elegida") or ""
+    temperatura = lead.get("temperatura") or ""
+
+    partes = []
+    if nombre:
+        partes.append(f"Nombre: {nombre}.")
+    if compania:
+        partes.append(f"Compañía actual: {compania}.")
+    if recarga:
+        partes.append(f"Recarga habitual: ${recarga}.")
+    if promo:
+        partes.append(f"Promo que le corresponde: {promo}.")
+    if temperatura:
+        partes.append(f"Temperatura del lead: {temperatura}.")
+    contexto = " ".join(partes) if partes else "Sin datos adicionales del lead."
+
+    urgencia = "Es el primer recordatorio — tono cálido y cercano." if rescate == 1 else \
+               "Es el segundo recordatorio — muestra un poco más de urgencia sin ser agresivo."
+
+    system = (
+        "Eres Vera, asesora de ventas de Telcel Región 4. "
+        "Escribe un mensaje de seguimiento de WhatsApp para recuperar a este lead de portabilidad. "
+        f"{urgencia} "
+        "Reglas: máximo 2 oraciones, sin markdown, máximo 1 emoji, "
+        "usa el nombre si lo tienes, menciona la promo o beneficio si lo tienes, "
+        "no menciones que es un recordatorio automático ni que el lead no ha respondido. "
+        f"Contexto del lead: {contexto}"
+    )
+
+    try:
+        llm = get_llm()
+        resp = await llm.ainvoke([
+            SystemMessage(content=system),
+            HumanMessage(content="Genera el mensaje."),
+        ])
+        texto = resp.content.strip()
+        logger.info("llm_mensaje_generado", extra={"lead_id": lead.get("id"), "rescate": rescate})
+        return texto
+    except Exception as exc:
+        logger.warning("llm_mensaje_fallback", extra={"lead_id": lead.get("id"), "error": str(exc)})
+        return _mensaje(lead.get("bitrix_stage", "C90:NEW"), lead.get("seguimientos_enviados", 0))
+
+
+async def _enviar_seguimiento(lead_id: int, phone: str, texto: str, bitrix_stage: str = "", numero_seq: int = 0) -> None:
+    if not texto:
+        texto = _mensaje(bitrix_stage, numero_seq)
     if phone.startswith("tg_"):
         chat_id = phone.replace("tg_", "")
         await _tg.send_message(chat_id, texto)
@@ -265,7 +317,8 @@ async def _procesar_lead(row: dict) -> None:
         return
 
     try:
-        await _enviar_seguimiento(lead_id, phone, bitrix_stage, num_enviados)
+        texto = await _generar_mensaje_rescate(row, rescate=1)
+        await _enviar_seguimiento(lead_id, phone, texto, bitrix_stage, num_enviados)
 
         # Primer seguimiento → mover deal a Rescate 1 en Bitrix
         if num_enviados == 0 and deal_id:
@@ -335,7 +388,8 @@ async def _procesar_rescate2(row: dict) -> None:
         return
 
     try:
-        await _enviar_seguimiento(lead_id, phone, STAGE_RESCATE1, 0)
+        texto = await _generar_mensaje_rescate(row, rescate=2)
+        await _enviar_seguimiento(lead_id, phone, texto, STAGE_RESCATE1, 0)
 
         if deal_id:
             await _mover_a_rescate2(lead_id, deal_id)
@@ -379,7 +433,8 @@ async def job_seguimientos() -> None:
             """
             SELECT id, telefono, bitrix_stage, bitrix_lead_id,
                    COALESCE(seguimientos_enviados, 0) AS seguimientos_enviados,
-                   ultimo_seguimiento, created_at
+                   ultimo_seguimiento, created_at,
+                   nombre, compania_donante, recarga_habitual, promo_elegida, temperatura, municipio
             FROM leads
             WHERE bitrix_stage NOT IN ('C90:WON', 'C90:1', 'C90:2')
               AND bitrix_stage != ''
@@ -408,7 +463,8 @@ async def job_seguimientos() -> None:
     try:
         leads_r2 = await db.fetch(
             """
-            SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento
+            SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento,
+                   nombre, compania_donante, recarga_habitual, promo_elegida, temperatura, municipio
             FROM leads
             WHERE bitrix_stage = 'C90:1'
               AND updated_at > NOW() - INTERVAL '30 days'
