@@ -1,6 +1,7 @@
 """Endpoints de administración — requieren X-Admin-Token."""
 
 import asyncio
+import hmac
 import logging
 
 from fastapi import APIRouter, Header, HTTPException
@@ -14,7 +15,12 @@ logger = logging.getLogger(__name__)
 
 
 def _check_token(x_admin_token: str) -> None:
-    if x_admin_token != settings.admin_token:
+    # Fail-closed: si ADMIN_TOKEN no está configurado, se niega todo acceso.
+    if not settings.admin_token:
+        logger.error("admin_token_not_configured")
+        raise HTTPException(status_code=503, detail="admin disabled: token not configured")
+    # Comparación en tiempo constante (evita timing attack).
+    if not hmac.compare_digest(x_admin_token, settings.admin_token):
         raise HTTPException(status_code=403, detail="forbidden")
 
 

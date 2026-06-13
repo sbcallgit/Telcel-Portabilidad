@@ -1,9 +1,11 @@
+import hmac
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.portabilidad.graph import get_agent_graph
+from api.routes.admin import _check_token
 from config.settings import settings
 from integrations import debounce
 from integrations.bitrix import connector as bitrix_connector
@@ -60,8 +62,12 @@ async def _process_telegram_message(thread_id: str, text: str, chat_id: int, pho
 @router.post("/webhooks/telegram", status_code=200)
 async def telegram_webhook(request: Request) -> dict:
     """Recibe updates de Telegram, valida el secret y procesa con debounce."""
+    # Fail-closed: sin secret configurado no se acepta tráfico.
+    if not settings.telegram_webhook_secret:
+        logger.error("telegram_webhook_secret_not_configured")
+        raise HTTPException(status_code=503, detail="telegram webhook disabled: secret not configured")
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if secret != settings.telegram_webhook_secret:
+    if not hmac.compare_digest(secret, settings.telegram_webhook_secret):
         logger.warning("telegram_webhook_invalid_secret")
         raise HTTPException(status_code=401, detail="Invalid secret")
 
@@ -95,8 +101,10 @@ async def telegram_webhook(request: Request) -> dict:
 @router.post("/webhooks/telegram/setup")
 async def setup_telegram_webhook(
     url: str = Query(description="URL pública del webhook, ej: https://telegram-portabilidad.callcomcc.io"),
+    x_admin_token: str = Header(...),
 ) -> dict:
     """Registra el webhook en Telegram. Llamar una vez al configurar el entorno."""
+    _check_token(x_admin_token)
     if not settings.telegram_bot_token:
         raise HTTPException(status_code=400, detail="TELEGRAM_BOT_TOKEN no configurado en .env")
 
@@ -106,8 +114,9 @@ async def setup_telegram_webhook(
 
 
 @router.get("/webhooks/telegram/info")
-async def telegram_bot_info() -> dict:
+async def telegram_bot_info(x_admin_token: str = Header(...)) -> dict:
     """Verifica que el token es válido y retorna la info del bot."""
+    _check_token(x_admin_token)
     if not settings.telegram_bot_token:
         raise HTTPException(status_code=400, detail="TELEGRAM_BOT_TOKEN no configurado en .env")
     return await _tg.get_me()

@@ -24,9 +24,9 @@ services:
     environment:
       POSTGRES_DB: ${DB_NAME:-portabilidad}
       POSTGRES_USER: ${DB_USER:-bot}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-botpassword}
-    ports:
-      - "5434:5432"
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD es obligatorio}
+    # Sin mapeo de puerto al host: la DB solo es accesible dentro de la red Docker.
+    # Para acceso puntual de operación usar un túnel SSH, no exponer 5432.
     volumes:
       - portabilidad_postgres_data:/var/lib/postgresql/data
     healthcheck:

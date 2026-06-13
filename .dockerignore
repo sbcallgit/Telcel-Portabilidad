@@ -1,0 +1,56 @@
+# Secretos y entorno — NUNCA dentro de la imagen
+.env
+.env.*
+*.env
+
+# Datos / exports con PII
+reporteskpi/
+exports/
+
+# Git
+.git
+.gitignore
+
+# Documentación y specs (no necesarios en runtime)
+docs/
+*.md
+# Nota: tests/ se deja DENTRO de la imagen a propósito —
+# `make test` corre `pytest tests/` con `docker compose exec api`.
+
+# Caches y artefactos de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Pre-commit
+.pre-commit-config.yaml
+.pre-commit-cache/

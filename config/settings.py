@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     db_port: int = 5432
     db_name: str = "portabilidad"
     db_user: str = "bot"
-    db_password: str = "botpassword"
+    db_password: str = ""  # obligatorio vía .env — sin default en código
 
     # Redis
     redis_url: str = "redis://redis:6379"
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
 
     # Telegram (para pruebas — no requiere aprobación de Meta)
     telegram_bot_token: str = ""
-    telegram_webhook_secret: str = "tg_webhook_secret_dev"
+    telegram_webhook_secret: str = ""  # obligatorio vía .env — sin default en código
 
     # Qdrant (vector database — RAG de objeciones)
     qdrant_url: str = "http://qdrant:6333"
@@ -54,13 +54,13 @@ class Settings(BaseSettings):
     debounce_window_ms: int = 1500
 
     # Admin
-    admin_token: str = "changeme"
+    admin_token: str = ""  # obligatorio vía .env — sin default en código
     seguimientos_test_phone: str = ""  # Si está definido, el job solo procesa ese teléfono
 
     # Vicidial — marcador predictivo (tercer seguimiento)
     vicidial_url: str = "http://189.209.207.222/vicidial/non_agent_api.php"
     vicidial_user: str = "api_n8n"
-    vicidial_pass: str = "key2-Fit"
+    vicidial_pass: str = ""  # obligatorio vía .env — sin default en código (rotar el valor expuesto)
     vicidial_list_id: str = "101"
     vicidial_campaign_id: str = "n8n_port"
 

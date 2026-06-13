@@ -4,9 +4,10 @@
 rag-portabilidad.callcomcc.io {
     reverse_proxy api:8001
 
-    # API Key auth simple (opcional)
+    # API Key auth simple. El token se inyecta vía variable de entorno de Caddy
+    # (RAG_BEARER_TOKEN) — NUNCA hardcodear el valor aquí. Rotar el valor expuesto.
     @noauth {
-        not header Authorization "Bearer a3f8c2e1d4b7a9f0e2c5d8b1a4f7c0e3d6b9a2f5c8e1d4b7a0f3c6e9d2b5a8f1"
+        not header Authorization "Bearer {env.RAG_BEARER_TOKEN}"
         not path /health
     }
     respond @noauth 401 {
