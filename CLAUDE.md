@@ -412,7 +412,7 @@ lead en C90:2
 
 - **`leads.bitrix_stage`** — columna local sincronizada desde Bitrix por `job_bitrix_sync` (cada 30 min, máx 1 000 leads)
 - **`minutos_desde_ultimo_mensaje(phone)`** — consulta `MAX(checkpoint->>'ts')` en tabla `checkpoints` (LangGraph) por `thread_id = phone`
-- **`leads.ultimo_seguimiento`** — timestamp del último seguimiento enviado; gate de 60 min para Rescate 2
+- **`leads.ultimo_seguimiento`** — timestamp del último seguimiento enviado; gate de 60 min para Rescate 2 y 3. Si es NULL (stage llegó vía sync de Bitrix sin pasar por el job), se usa `updated_at` como fallback para no bloquear el flujo indefinidamente.
 - **`leads.seguimientos_enviados`** — contador acumulado de mensajes de seguimiento
 
 ### Exclusiones de Rescate 1

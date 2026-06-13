@@ -189,10 +189,12 @@ async def _procesar_rescate3(row: dict) -> None:
     if not _en_ventana(ahora):
         return
 
-    # Timer: 60 min desde que entró a C90:2 (cuando se envió Rescate 2)
-    if not ultimo_seguimiento:
+    # Timer: 60 min desde que entró a C90:2 (cuando se envió Rescate 2).
+    # Fallback a updated_at si ultimo_seguimiento es NULL (stage llegó vía sync de Bitrix).
+    referencia = ultimo_seguimiento or row.get("updated_at")
+    if not referencia:
         return
-    mins_desde_rescate2 = (ahora - ultimo_seguimiento.astimezone(TZ)).total_seconds() / 60
+    mins_desde_rescate2 = (ahora - referencia.astimezone(TZ)).total_seconds() / 60
     if mins_desde_rescate2 < MIN_RESCATE3:
         logger.info("rescate3_skip_espera", extra={"lead_id": lead_id, "mins_desde_rescate2": round(mins_desde_rescate2, 1)})
         return
@@ -406,10 +408,13 @@ async def _procesar_rescate2(row: dict) -> None:
     if not _en_ventana(ahora):
         return
 
-    # Timer: 60 min desde que entró a C90:1 (cuando se envió Rescate 1)
-    if not ultimo_seguimiento:
+    # Timer: 60 min desde que entró a C90:1 (cuando se envió Rescate 1).
+    # Si ultimo_seguimiento es NULL (stage llegó vía sync de Bitrix sin pasar por el job),
+    # usar updated_at como referencia para no bloquear el rescate indefinidamente.
+    referencia = ultimo_seguimiento or row.get("updated_at")
+    if not referencia:
         return
-    mins_desde_rescate1 = (ahora - ultimo_seguimiento.astimezone(TZ)).total_seconds() / 60
+    mins_desde_rescate1 = (ahora - referencia.astimezone(TZ)).total_seconds() / 60
     if mins_desde_rescate1 < MIN_RESCATE2:
         logger.info("rescate2_skip_espera", extra={"lead_id": lead_id, "mins_desde_rescate1": round(mins_desde_rescate1, 1)})
         return
@@ -498,7 +503,7 @@ async def job_seguimientos() -> None:
     # ── Rescate 2: leads en C90:1 con 60+ min desde el primer rescate ────────
     try:
         query_r2 = f"""
-            SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento,
+            SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento, updated_at,
                    nombre, compania_donante, recarga_habitual, promo_elegida, temperatura, municipio
             FROM leads
             WHERE bitrix_stage = 'C90:1'
@@ -523,7 +528,7 @@ async def job_seguimientos() -> None:
     # ── Rescate 3: leads en C90:2 con 60+ min → llamada Vicidial ─────────────
     try:
         query_r3 = f"""
-            SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento
+            SELECT id, telefono, bitrix_lead_id, ultimo_seguimiento, updated_at
             FROM leads
             WHERE bitrix_stage = 'C90:2'
               AND updated_at > NOW() - INTERVAL '30 days'
