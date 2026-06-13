@@ -321,26 +321,25 @@ async def _enviar_seguimiento(lead_id: int, phone: str, texto: str, bitrix_stage
 
 
 async def _procesar_lead(row: dict) -> None:
+    """Envía Rescate 1 si el usuario lleva 30+ min sin responder.
+
+    Aplica a cualquier stage excepto C90:WON, C90:1, C90:2, C90:3 (filtrados en SQL).
+    No usa cadencias por stage — la única condición de tiempo es 30 min de silencio.
+    """
     lead_id = row["id"]
     phone = row["telefono"]
     bitrix_stage = row["bitrix_stage"] or ""
     deal_id = row.get("bitrix_lead_id") or ""
     num_enviados = row["seguimientos_enviados"] or 0
-    ultimo_raw = row["ultimo_seguimiento"] or row["created_at"]
 
     ahora = datetime.now(tz=TZ)
     if not _en_ventana(ahora):
         return
 
-    # Verificar que el usuario lleva al menos 30 min sin escribir
+    # Única condición de tiempo: 30+ min sin mensaje del usuario
     minutos = await minutos_desde_ultimo_mensaje(phone)
     if minutos is not None and minutos < MIN_SILENCIO:
         logger.info("seguimiento_skip_reciente", extra={"lead_id": lead_id, "minutos": round(minutos, 1)})
-        return
-
-    cadencia = _cadencia(bitrix_stage)
-    proximo = _siguiente_envio(ultimo_raw, cadencia, num_enviados)
-    if proximo is None or ahora < proximo.astimezone(TZ):
         return
 
     ya_enviado = await db.fetchval(
@@ -463,9 +462,10 @@ async def job_seguimientos() -> None:
         return
 
     test_phone = settings.seguimientos_test_phone.strip()
-    filtro_sql = "AND telefono = $2" if test_phone else ""
+    # $1 en todas las queries cuando hay test_phone (único parámetro)
+    filtro_sql = "AND telefono = $1" if test_phone else ""
 
-    # ── Rescate 1: leads fuera de WON, Rescate 1 y Rescate 2 ─────────────────
+    # ── Rescate 1: leads fuera de WON y stages de rescate ────────────────────
     try:
         query_r1 = f"""
             SELECT id, telefono, bitrix_stage, bitrix_lead_id,
@@ -473,15 +473,14 @@ async def job_seguimientos() -> None:
                    ultimo_seguimiento, created_at,
                    nombre, compania_donante, recarga_habitual, promo_elegida, temperatura, municipio
             FROM leads
-            WHERE bitrix_stage NOT IN ('C90:WON', 'C90:1', 'C90:2')
+            WHERE bitrix_stage NOT IN ('C90:WON', 'C90:1', 'C90:2', 'C90:3')
               AND bitrix_stage != ''
-              AND COALESCE(seguimientos_enviados, 0) < $1
               AND updated_at > NOW() - INTERVAL '30 days'
               {filtro_sql}
             ORDER BY updated_at DESC
             LIMIT 200
             """
-        leads_r1 = await db.fetch(query_r1, MAX_SEGUIMIENTOS, *([test_phone] if test_phone else []))
+        leads_r1 = await db.fetch(query_r1, *([test_phone] if test_phone else []))
     except Exception as exc:
         logger.error("job_seguimientos_db_error", extra={"error": str(exc)})
         return
@@ -504,7 +503,7 @@ async def job_seguimientos() -> None:
             FROM leads
             WHERE bitrix_stage = 'C90:1'
               AND updated_at > NOW() - INTERVAL '30 days'
-              {filtro_sql.replace('$2', '$1') if test_phone else ''}
+              {filtro_sql}
             ORDER BY updated_at DESC
             LIMIT 200
             """
@@ -528,7 +527,7 @@ async def job_seguimientos() -> None:
             FROM leads
             WHERE bitrix_stage = 'C90:2'
               AND updated_at > NOW() - INTERVAL '30 days'
-              {filtro_sql.replace('$2', '$1') if test_phone else ''}
+              {filtro_sql}
             ORDER BY updated_at DESC
             LIMIT 200
             """
