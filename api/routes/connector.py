@@ -5,11 +5,12 @@ POST /webhooks/connector  →  Bitrix24 envía aquí el evento ONIMCONNECTORMESS
 El handler extrae el teléfono, deduplica, y reenvía el mensaje a WhatsApp.
 """
 
+import hmac
 import logging
-import time
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
+from config.settings import settings
 from integrations.redis_client import get_redis
 from integrations.telegram.client import TelegramClient
 from integrations.whatsapp.client import WhatsAppClient
@@ -19,6 +20,27 @@ logger = logging.getLogger(__name__)
 
 _wa = WhatsAppClient()
 _tg = TelegramClient()
+
+
+async def _extract_app_token(request: Request, json_payload: dict | None) -> str:
+    """Obtiene el application_token de Bitrix desde query param, body JSON o form.
+
+    Bitrix lo envía de formas distintas según la configuración del handler;
+    se cubren las ubicaciones conocidas.
+    """
+    tok = request.query_params.get("application_token", "")
+    if tok:
+        return tok
+    if isinstance(json_payload, dict):
+        auth = json_payload.get("auth") or {}
+        tok = str(json_payload.get("application_token", "") or (auth.get("application_token", "") if isinstance(auth, dict) else ""))
+        if tok:
+            return tok
+    try:
+        form = await request.form()
+        return form.get("application_token", "") or form.get("auth[application_token]", "")
+    except Exception:
+        return ""
 
 
 async def _forward_to_user(phone: str, text: str) -> None:
@@ -44,16 +66,30 @@ def _extract_phone_from_chat_id(chat_id: str) -> str:
 @router.post("/webhooks/connector")
 async def connector_incoming(request: Request) -> dict:
     """Recibe mensajes del asesor desde Bitrix24 y los reenvía al usuario por WhatsApp."""
+    # ── Autenticación (F-05): application_token de Bitrix, fail-closed ──────────
+    # Sin token configurado el endpoint queda deshabilitado (el camino activo es
+    # el polling en connector_poll.py, que no depende de este webhook).
+    if not settings.bitrix_application_token:
+        logger.error("connector_application_token_not_configured")
+        raise HTTPException(status_code=503, detail="connector disabled: token not configured")
+
     try:
         payload = await request.json()
     except Exception:
+        payload = None
+
+    token = await _extract_app_token(request, payload)
+    if not token or not hmac.compare_digest(token, settings.bitrix_application_token):
+        logger.warning("connector_incoming_unauthorized")
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+    if payload is None:
         return {"status": "invalid_json"}
 
     data = payload.get("data", {})
     connector = data.get("CONNECTOR", "")
 
     # Ignorar eventos de otros conectores
-    from config.settings import settings
     if connector and connector != settings.bitrix_connector_id:
         return {"status": "ignored"}
 

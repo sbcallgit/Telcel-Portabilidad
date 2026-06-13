@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     bitrix_client_secret: str = ""
     bitrix_connector_id: str = "whatsapp_vera"
     bitrix_connector_line_id: str = ""
+    # application_token que Bitrix envía en cada evento saliente (ONIMCONNECTORMESSAGEADD).
+    # Se usa para autenticar /webhooks/connector. Sin él, ese endpoint queda deshabilitado.
+    bitrix_application_token: str = ""
     bitrix_stage_ia_porta: str = "C90:NEW"        # Primer contacto — bot activo
     bitrix_stage_prospecto: str = "C90:PROSPECTO"  # KPIs completos — listo para portabilidad
     bitrix_stage_seguimiento: str = "C90:SEGUIMIENTO"  # Quiere ser contactado después
