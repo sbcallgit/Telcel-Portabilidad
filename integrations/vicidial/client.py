@@ -29,7 +29,11 @@ async def agregar_lead(phone: str) -> tuple[bool, str]:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True, verify=False) as client:
+        # verify configurable: el modo inseguro (verify=False) es opt-in explícito
+        # vía VICIDIAL_VERIFY_TLS, no el default. Evita MITM silencioso.
+        async with httpx.AsyncClient(
+            timeout=15, follow_redirects=True, verify=settings.vicidial_verify_tls
+        ) as client:
             r = await client.get(settings.vicidial_url, params=params)
             r.raise_for_status()
             texto = r.text.strip()

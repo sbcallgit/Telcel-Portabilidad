@@ -66,6 +66,9 @@ class Settings(BaseSettings):
     vicidial_pass: str = ""  # obligatorio vía .env — sin default en código (rotar el valor expuesto)
     vicidial_list_id: str = "101"
     vicidial_campaign_id: str = "n8n_port"
+    # Verificación TLS de la API Vicidial. Default seguro (True). Solo poner en
+    # False de forma consciente si el servidor usa un cert inválido (MITM posible).
+    vicidial_verify_tls: bool = True
 
     # App
     app_version: str = "1.0.0"

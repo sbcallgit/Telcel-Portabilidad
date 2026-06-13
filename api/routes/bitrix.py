@@ -31,8 +31,13 @@ async def bitrix_oauth_callback(code: str = Query(default="")) -> str:
             "<p>Puedes cerrar esta ventana.</p>"
         )
     except Exception as exc:
+        # No reflejar la excepción al navegador (puede contener detalles del backend
+        # o de la respuesta OAuth). El detalle queda solo en logs server-side.
         logger.error("bitrix_oauth_callback_error", extra={"error": str(exc)})
-        return f"<h3>❌ Error al autorizar:</h3><pre>{exc}</pre>"
+        return (
+            "<h3>❌ Error al autorizar.</h3>"
+            "<p>No se pudo completar la autorización. Revisa los logs del servidor.</p>"
+        )
 
 
 @router.post("/bitrix/install")

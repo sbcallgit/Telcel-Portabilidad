@@ -95,6 +95,13 @@ async def receive_message(request: Request) -> dict:
         if not verify_webhook_signature(body, signature, settings.whatsapp_app_secret):
             logger.warning("webhook_signature_invalid")
             raise HTTPException(status_code=401, detail="Invalid signature")
+    elif settings.environment == "production":
+        # Fail-closed: en producción la firma es obligatoria. Meta siempre firma.
+        logger.error("whatsapp_app_secret_not_configured")
+        raise HTTPException(status_code=503, detail="webhook disabled: app secret not configured")
+    else:
+        # Solo dev/test: se permite sin firma para pruebas locales (curl).
+        logger.warning("webhook_signature_skipped_dev")
 
     try:
         import json
