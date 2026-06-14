@@ -208,6 +208,7 @@ async def _get_historial(phone: str) -> str:
     """
     try:
         from langchain_core.messages import AIMessage, HumanMessage
+
         from agents.portabilidad.graph import get_agent_graph
 
         snapshot = await get_agent_graph().aget_state(
@@ -237,8 +238,9 @@ async def _generar_mensaje_rescate(lead: dict, rescate: int) -> str:
 
     Lee la conversación desde LangGraph checkpoints; fallback a template estático.
     """
-    from agents.llm import get_llm
     from langchain_core.messages import HumanMessage, SystemMessage
+
+    from agents.llm import get_llm
 
     phone = lead.get("telefono", "")
     historial = await _get_historial(phone)

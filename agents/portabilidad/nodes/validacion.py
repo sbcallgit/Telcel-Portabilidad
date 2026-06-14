@@ -6,7 +6,6 @@ import re
 from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
-from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
     ANTI_RENDICION,
     ASL_CATALOG,
@@ -20,6 +19,7 @@ from agents.portabilidad.context import (
     SALES_APPROACH,
 )
 from agents.portabilidad.state import PortabilidadState
+from agents.portabilidad.utils import render_prompt, split_msg
 from integrations.postgres import client as db
 
 logger = logging.getLogger(__name__)
@@ -447,13 +447,13 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
             reply = "No tengo registrada esa LADA. ¿Me compartes tu número completo de 10 dígitos?"
         return {"messages": [AIMessage(content=reply)]}
 
-    _INFO_TRIGGERS = ["info", "información", "informacion"]
-    _INTERESA_TRIGGERS = ["me interesa", "quiero saber", "me intereso"]
-    _PRECIO_TRIGGERS = ["cuánto cuesta", "cuanto cuesta", "precio", "cuánto vale", "cuanto vale"]
-    _ROBOT_TRIGGERS = ["eres robot", "eres humano", "eres persona", "eres una persona", "eres ia", "eres inteligencia"]
-    _OFRECES_TRIGGERS = ["qué ofreces", "que ofreces", "qué hacen", "que hacen", "qué vendes", "que vendes"]
+    info_triggers = ["info", "información", "informacion"]
+    interesa_triggers = ["me interesa", "quiero saber", "me intereso"]
+    precio_triggers = ["cuánto cuesta", "cuanto cuesta", "precio", "cuánto vale", "cuanto vale"]
+    robot_triggers = ["eres robot", "eres humano", "eres persona", "eres una persona", "eres ia", "eres inteligencia"]
+    ofreces_triggers = ["qué ofreces", "que ofreces", "qué hacen", "que hacen", "qué vendes", "que vendes"]
 
-    if any(t in lower for t in _INFO_TRIGGERS):
+    if any(t in lower for t in info_triggers):
         return {
             "messages": [AIMessage(content=(
                 "Claro 😊 Te paso la info correcta según tu zona. "
@@ -461,14 +461,14 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
             ))]
         }
 
-    if any(t in lower for t in _INTERESA_TRIGGERS):
+    if any(t in lower for t in interesa_triggers):
         return {
             "messages": [AIMessage(content=(
                 "Perfecto 🙌 Para activarte la promo necesito tu número de celular. ¿Me lo compartes?"
             ))]
         }
 
-    if any(t in lower for t in _PRECIO_TRIGGERS):
+    if any(t in lower for t in precio_triggers):
         return {
             "messages": [AIMessage(content=(
                 "Depende de lo que recargas hoy. Con $50 o $100 puedes tener el triple de beneficios "
@@ -476,7 +476,7 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
             ))]
         }
 
-    if any(t in lower for t in _ROBOT_TRIGGERS):
+    if any(t in lower for t in robot_triggers):
         return {
             "messages": [AIMessage(content=(
                 "Soy Vera de Telcel, estoy aquí para ayudarte con tu portabilidad 😊 "
@@ -484,7 +484,7 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
             ))]
         }
 
-    if any(t in lower for t in _OFRECES_TRIGGERS):
+    if any(t in lower for t in ofreces_triggers):
         return {
             "messages": [AIMessage(content=(
                 "Te ayudo a portarte a Telcel conservando tu mismo número y obtener "
