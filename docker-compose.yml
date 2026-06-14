@@ -52,7 +52,9 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:latest
+    # Pinear a una versión fija en prod vía QDRANT_IMAGE (reproducibilidad/supply-chain).
+    # Ej: QDRANT_IMAGE=qdrant/qdrant:v1.12.4 — confirmar el tag desplegado.
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:latest}
     container_name: bot_telcel_qdrant
     restart: unless-stopped
     ports:

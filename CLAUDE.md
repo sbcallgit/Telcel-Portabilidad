@@ -12,9 +12,9 @@
 | Componente | Tecnología | Propósito |
 |---|---|---|
 | API | FastAPI + Python 3.12 | Webhook de WhatsApp, endpoints de control |
-| Agente | LangGraph + Claude (Anthropic) | Orquestación del flujo de venta |
+| Agente | LangGraph + LLM vía OpenRouter (`langchain-openai`) | Orquestación del flujo de venta |
 | Base de datos | PostgreSQL 16 | Leads, conversaciones, base de conocimiento, checkpoints |
-| Caché / Cola | Redis 7 + arq | Contexto de sesión y cola de mensajes |
+| Caché | Redis 7 | Contexto de sesión, debounce y claves del conector |
 | Memoria conversacional | `langgraph-checkpoint-postgres` + `psycopg` | Checkpoints persistentes del agente (sobrevive reinicios) |
 | Memoria semántica | Qdrant + fastembed | RAG vectorial para objeciones (modelo multilingüe local) |
 | Jobs | APScheduler | Seguimientos automáticos |
@@ -115,7 +115,6 @@ make dev          # Levanta API + PostgreSQL + Redis en modo desarrollo (hot rel
 make build        # Construye la imagen Docker
 make down         # Apaga todos los contenedores
 make seed         # Carga la base de conocimiento (LADAs, promos, CACs, equipos, objeciones)
-make worker       # Levanta el worker de la cola de mensajes arq
 make test         # Corre tests con cobertura
 make lint         # ruff + mypy
 make health       # curl /health y muestra el resultado
@@ -144,7 +143,7 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `BITRIX_CONNECTOR_ID` | ID del conector imconnector registrado en el portal (`telegram_ai_agent`) |
 | `BITRIX_CONNECTOR_LINE_ID` | ID del Open Channel en Bitrix24 (actualmente `542`) |
 | `BITRIX_PUBLIC_URL` | URL pública del servidor para el callback OAuth de Bitrix |
-| `ANTHROPIC_API_KEY` | API key de Claude (Anthropic) |
+| `OPENROUTER_API_KEY` | API key del gateway LLM (OpenRouter, compatible con API de OpenAI) |
 | `DB_PASSWORD` | Contraseña de PostgreSQL |
 | `REDIS_URL` | URL de conexión a Redis |
 | `DEBOUNCE_WINDOW_MS` | Ventana de debounce en ms (0 = desactivado, producción: `10000`) |
