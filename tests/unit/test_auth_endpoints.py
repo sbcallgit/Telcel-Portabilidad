@@ -51,10 +51,6 @@ def test_admin_token_incorrecto_retorna_403(client, method, path, json_body):
     assert response.status_code == 403
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="api/routes/admin.py:38 requiere Header(...); FastAPI responde 422 sin header, no 403.",
-)
 @pytest.mark.parametrize(
     ("method", "path", "json_body"),
     [
@@ -90,10 +86,6 @@ def test_telegram_setup_info_token_incorrecto_retorna_403(client, method, path):
     assert response.status_code == 403
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="api/routes/telegram.py:104,117 requieren Header(...); FastAPI responde 422 sin header, no 403.",
-)
 @pytest.mark.parametrize(
     ("method", "path"),
     [
@@ -168,4 +160,3 @@ def test_telcel_firma_valida_payload_status_no_toca_io_y_retorna_ignored(client,
 
     assert response.status_code == 200
     assert response.json() == {"status": "ignored"}
-

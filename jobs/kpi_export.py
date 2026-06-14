@@ -8,7 +8,7 @@ Destino: tabla kpi_conversaciones (aislada del agente).
 import asyncio
 import csv
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytz
 
@@ -19,6 +19,18 @@ logger = logging.getLogger(__name__)
 TZ = pytz.timezone("America/Monterrey")
 _BATCH_SIZE = 50
 _BATCH_SLEEP = 0.3  # cede el event loop entre lotes
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _neutralize_csv_formula(value):
+    """Prefija valores string que Excel/BI podrían interpretar como fórmula."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return f"'{value}"
+    return value
+
+
+def _sanitize_csv_row(row: dict) -> dict:
+    return {key: _neutralize_csv_formula(value) for key, value in row.items()}
 
 
 async def _ensure_graph_initialized() -> None:
@@ -31,8 +43,9 @@ async def _ensure_graph_initialized() -> None:
     if graph_module._agent_graph is not None:
         return
     try:
-        from psycopg_pool import AsyncConnectionPool
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from psycopg_pool import AsyncConnectionPool
+
         from config.settings import settings
 
         pool = AsyncConnectionPool(
@@ -88,6 +101,7 @@ async def _get_message_counts(phone: str) -> dict:
     """Cuenta mensajes y extrae texto por actor (cliente/bot) usando graph.aget_state()."""
     try:
         from langchain_core.messages import AIMessage, HumanMessage
+
         from agents.portabilidad.graph import get_agent_graph
 
         snapshot = await get_agent_graph().aget_state(
@@ -140,7 +154,7 @@ async def _get_deal_data(deal_id: str) -> dict:
             try:
                 cerrado_el = datetime.fromisoformat(
                     close_str.replace("T", " ").split("+")[0]
-                ).replace(tzinfo=timezone.utc)
+                ).replace(tzinfo=UTC)
             except ValueError:
                 pass
 
@@ -160,8 +174,8 @@ async def _get_deal_data(deal_id: str) -> dict:
 async def _get_chat_data(phone: str) -> dict:
     """Lee mensajes de Open Lines para KPIs de tiempo y conteo humano."""
     try:
-        from integrations.redis_client import get_redis
         from integrations.bitrix.connector import _call_poll
+        from integrations.redis_client import get_redis
 
         redis = await get_redis()
         chat_id = await redis.get(f"connector_chat:{phone}")
@@ -193,7 +207,7 @@ async def _get_chat_data(phone: str) -> dict:
             try:
                 dt = datetime.fromisoformat(str(ts_raw))
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
+                    dt = dt.replace(tzinfo=UTC)
             except (ValueError, TypeError):
                 continue
             timestamps.append(dt)
@@ -451,7 +465,7 @@ async def export_to_csv(filepath: str | None = None) -> str:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
-            writer.writerow(dict(row))
+            writer.writerow(_sanitize_csv_row(dict(row)))
 
     logger.info("kpi_export_csv_done", extra={"filepath": filepath, "rows": len(rows)})
     return filepath

@@ -101,7 +101,7 @@ async def telegram_webhook(request: Request) -> dict:
 @router.post("/webhooks/telegram/setup")
 async def setup_telegram_webhook(
     url: str = Query(description="URL pública del webhook, ej: https://telegram-portabilidad.callcomcc.io"),
-    x_admin_token: str = Header(...),
+    x_admin_token: str | None = Header(default=None),
 ) -> dict:
     """Registra el webhook en Telegram. Llamar una vez al configurar el entorno."""
     _check_token(x_admin_token)
@@ -114,7 +114,7 @@ async def setup_telegram_webhook(
 
 
 @router.get("/webhooks/telegram/info")
-async def telegram_bot_info(x_admin_token: str = Header(...)) -> dict:
+async def telegram_bot_info(x_admin_token: str | None = Header(default=None)) -> dict:
     """Verifica que el token es válido y retorna la info del bot."""
     _check_token(x_admin_token)
     if not settings.telegram_bot_token:

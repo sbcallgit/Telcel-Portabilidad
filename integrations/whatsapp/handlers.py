@@ -14,11 +14,14 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> boo
     return hmac.compare_digest(expected, signature)
 
 
-def parse_whatsapp_message(payload: dict) -> tuple[str, str, str] | None:
+def parse_whatsapp_message(payload: dict | None) -> tuple[str, str, str] | None:
     """Extrae (phone, text, message_id) del payload de Meta.
 
     Retorna None para status updates, mensajes no-texto, o payloads malformados.
     """
+    if not isinstance(payload, dict):
+        return None
+
     try:
         entry = payload.get("entry", [])
         if not entry:
@@ -48,5 +51,5 @@ def parse_whatsapp_message(payload: dict) -> tuple[str, str, str] | None:
             return None
 
         return phone, text, message_id
-    except (IndexError, KeyError, TypeError):
+    except (AttributeError, IndexError, KeyError, TypeError):
         return None

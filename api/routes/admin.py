@@ -14,11 +14,13 @@ router = APIRouter(prefix="/admin")
 logger = logging.getLogger(__name__)
 
 
-def _check_token(x_admin_token: str) -> None:
+def _check_token(x_admin_token: str | None) -> None:
     # Fail-closed: si ADMIN_TOKEN no está configurado, se niega todo acceso.
     if not settings.admin_token:
         logger.error("admin_token_not_configured")
         raise HTTPException(status_code=503, detail="admin disabled: token not configured")
+    if not x_admin_token:
+        raise HTTPException(status_code=403, detail="forbidden")
     # Comparación en tiempo constante (evita timing attack).
     if not hmac.compare_digest(x_admin_token, settings.admin_token):
         raise HTTPException(status_code=403, detail="forbidden")
@@ -35,7 +37,7 @@ class VicidialTestRequest(BaseModel):
 
 
 @router.post("/kpi-export")
-async def trigger_kpi_export(x_admin_token: str = Header(...)) -> JSONResponse:
+async def trigger_kpi_export(x_admin_token: str | None = Header(default=None)) -> JSONResponse:
     """Dispara el job de exportación de KPIs de forma inmediata.
 
     Corre en el mismo proceso FastAPI, con el checkpointer PostgreSQL y tokens
@@ -54,7 +56,7 @@ async def trigger_kpi_export(x_admin_token: str = Header(...)) -> JSONResponse:
 @router.post("/seguimiento-test")
 async def trigger_seguimiento_test(
     body: SeguimientoTestRequest,
-    x_admin_token: str = Header(...),
+    x_admin_token: str | None = Header(default=None),
 ) -> JSONResponse:
     """Envía un seguimiento manual a un teléfono específico para validar antes de habilitar el job.
 
@@ -65,8 +67,12 @@ async def trigger_seguimiento_test(
 
     from integrations.postgres import client as db
     from jobs.seguimientos import (
-        STAGE_RESCATE1, STAGE_RESCATE2,
-        _enviar_seguimiento, _generar_mensaje_rescate, _mover_a_rescate1, _mover_a_rescate2,
+        STAGE_RESCATE1,
+        STAGE_RESCATE2,
+        _enviar_seguimiento,
+        _generar_mensaje_rescate,
+        _mover_a_rescate1,
+        _mover_a_rescate2,
         minutos_desde_ultimo_mensaje,
     )
 
@@ -150,7 +156,7 @@ async def trigger_seguimiento_test(
 @router.post("/vicidial-test")
 async def trigger_vicidial_test(
     body: VicidialTestRequest,
-    x_admin_token: str = Header(...),
+    x_admin_token: str | None = Header(default=None),
 ) -> JSONResponse:
     """Envía un lead a Vicidial y mueve el deal a C90:3.
 

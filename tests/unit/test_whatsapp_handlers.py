@@ -80,9 +80,5 @@ def test_parse_whatsapp_message_malformado_retorna_none(payload):
     assert parse_whatsapp_message(payload) is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="integrations/whatsapp/handlers.py:51 no captura AttributeError para payload no dict.",
-)
 def test_parse_whatsapp_message_payload_none_retorna_none():
     assert parse_whatsapp_message(None) is None
