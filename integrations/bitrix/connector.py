@@ -10,6 +10,7 @@ Permite:
 import asyncio
 import logging
 import time
+import uuid
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -64,12 +65,15 @@ async def _get_or_create_external_chat_id(phone: str) -> str:
     """
     redis = await get_redis()
     key = f"connector_ext_chat:{phone}"
-    existing = await redis.get(key)
-    if existing:
-        return existing
     new_id = f"{phone}_{int(time.time())}"
-    await redis.setex(key, _EXT_CHAT_TTL, new_id)
-    return new_id
+    # SET NX atómico: si dos webhooks del primer mensaje llegan concurrentes,
+    # solo uno crea el external_chat_id; el otro reutiliza el ganador. Evita abrir
+    # dos sesiones de Open Lines (y dos deals) para el mismo teléfono. (P-03)
+    created = await redis.set(key, new_id, nx=True, ex=_EXT_CHAT_TTL)
+    if created:
+        return new_id
+    existing = await redis.get(key)
+    return existing or new_id
 
 
 async def _save_session(phone: str, session_id: str, chat_id: str, deal_id: str = "") -> None:
@@ -140,7 +144,8 @@ async def send_user_message(phone: str, text: str) -> str | None:
                     "phone": phone,
                 },
                 "message": {
-                    "id": f"wa_{phone}_{ts}",
+                    # Sufijo aleatorio: dos mensajes en el mismo segundo no colisionan (P-02)
+                    "id": f"wa_{phone}_{ts}_{uuid.uuid4().hex[:8]}",
                     "date": ts,
                     "text": text,
                 },
@@ -207,7 +212,8 @@ async def send_bot_message(phone: str, text: str) -> None:
                     "phone": phone,
                 },
                 "message": {
-                    "id": f"bot_{phone}_{ts}",
+                    # Sufijo aleatorio: dos mensajes en el mismo segundo no colisionan (P-02)
+                    "id": f"bot_{phone}_{ts}_{uuid.uuid4().hex[:8]}",
                     "date": ts,
                     "text": f"🤖 Vera | {text}",
                 },
@@ -233,10 +239,17 @@ async def _call_poll(method: str, params: dict) -> dict:
         return resp.json()
 
 
-async def poll_asesor_messages(phone: str, chat_id: str) -> list[tuple[str, str, int]]:
+async def poll_asesor_messages(phone: str, chat_id: str) -> tuple[list[tuple[str, str, int]], int]:
     """Lee mensajes nuevos del asesor en el chat via im.dialog.messages.get.
 
-    Retorna lista de (msg_id, text, author_id) no vistos aún.
+    Retorna (items, max_id_visto):
+      - items: lista de (msg_id, text, author_id) de mensajes del asesor a entregar,
+        en orden ascendente.
+      - max_id_visto: el id más alto visto en este poll (deliverable o no).
+
+    NO avanza el cursor connector_last_msg: lo hace el caller SOLO tras entregar
+    cada mensaje, para no perder mensajes del asesor si falla el reenvío. (P-01)
+    La excepción es la siembra del primer poll (no se reenvía histórico).
     """
     redis = await get_redis()
     last_key = f"connector_last_msg:{phone}"
@@ -253,7 +266,7 @@ async def poll_asesor_messages(phone: str, chat_id: str) -> list[tuple[str, str,
         if last_id == 0 and messages:
             max_existing = max(int(m.get("id", 0)) for m in messages)
             await redis.setex(last_key, _SESSION_TTL, str(max_existing))
-            return []
+            return [], max_existing
 
         new_items: list[tuple[str, str, int]] = []
         max_id = last_id
@@ -278,13 +291,10 @@ async def poll_asesor_messages(phone: str, chat_id: str) -> list[tuple[str, str,
             if text:
                 new_items.append((str(msg_id), text, int(author_id)))
 
-        if max_id > last_id:
-            await redis.setex(last_key, _SESSION_TTL, str(max_id))
-
-        return new_items
+        return new_items, max_id
     except Exception as exc:
         logger.error("connector_poll_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
-        return []
+        return [], last_id
 
 
 async def get_all_active_chats() -> list[tuple[str, str]]:

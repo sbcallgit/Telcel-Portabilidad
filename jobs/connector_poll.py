@@ -30,28 +30,48 @@ async def _forward_to_user(phone: str, text: str) -> None:
         await _wa.send_message(phone, text)
 
 
+_CURSOR_TTL = 86400  # 24h, igual que la sesión del conector
+
+
 async def _poll_phone(phone: str, chat_id: str, redis: object) -> None:
     from integrations.bitrix.connector import poll_asesor_messages
     try:
-        messages = await poll_asesor_messages(phone, chat_id)
+        messages, max_id = await poll_asesor_messages(phone, chat_id)
     except Exception as exc:
         logger.error("poll_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
         return
 
-    for msg_id, text, author_id in messages:
+    last_key = f"connector_last_msg:{phone}"
+    last_delivered: str | None = None
+    fallo = False
+
+    for msg_id, text, author_id in messages:  # orden ascendente
         dedup_key = f"connector_delivered:{msg_id}"
         if await redis.get(dedup_key):  # type: ignore[union-attr]
+            last_delivered = msg_id  # ya entregado antes — el cursor puede pasarlo
             continue
         try:
             await _forward_to_user(phone, text)
             await redis.setex(dedup_key, 86400, "1")  # type: ignore[union-attr]
+            last_delivered = msg_id
             logger.info("asesor_msg_forwarded", extra={
                 "phone_tail": phone[-4:],
                 "msg_id": msg_id,
                 "author_id": author_id,
             })
         except Exception as exc:
+            # No avanzar el cursor más allá del fallo: se reintenta el próximo ciclo. (P-01)
             logger.error("forward_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+            fallo = True
+            break
+
+    # Avance del cursor:
+    #  - sin fallos → al id más alto visto (incluye mensajes no-asesor ya procesados).
+    #  - con fallo  → solo hasta el último entregado (justo antes del que falló).
+    if not fallo and max_id:
+        await redis.setex(last_key, _CURSOR_TTL, str(max_id))  # type: ignore[union-attr]
+    elif fallo and last_delivered is not None:
+        await redis.setex(last_key, _CURSOR_TTL, last_delivered)  # type: ignore[union-attr]
 
 
 async def _poll_once() -> None:
