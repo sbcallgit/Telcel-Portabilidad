@@ -248,8 +248,8 @@ async def sondeo_node(state: PortabilidadState) -> dict:
             "messages": [AIMessage(content=(
                 "Claro Drive es almacenamiento en la nube de 20 GB para guardar "
                 "fotos, videos, contactos y archivos 📂\n"
-                "Se incluye desde recargas de $100 y lo usas desde la app Claro Drive "
-                "o en www.clarodrive.com."
+                "Viene incluido sin costo en todos tus paquetes Amigo Sin Límite, "
+                "y lo usas desde la app Claro Drive o en www.clarodrive.com."
             ))],
             "datos_lead": datos,
         }

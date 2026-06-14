@@ -282,7 +282,8 @@ async def oferta_node(state: PortabilidadState) -> dict:
             "messages": [AIMessage(content=(
                 "Claro Drive es almacenamiento en la nube de 20 GB para fotos, "
                 "videos, contactos y archivos 📂\n"
-                "Se incluye desde $100 y se usa desde la app o en www.clarodrive.com."
+                "Viene incluido sin costo en todos tus paquetes Amigo Sin Límite, "
+                "y se usa desde la app o en www.clarodrive.com."
             ))]
         }
 
