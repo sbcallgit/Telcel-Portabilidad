@@ -15,7 +15,9 @@ async def test_qf01_happy_path_valida_lada_y_avanza_a_oferta(agente):
 
     t2 = await turno(agente, "qf01", "recargo $100 al mes")
     assert t2.etapa == "oferta", f"con la recarga debe pasar a oferta, fue {t2.etapa!r}"
-    assert "100" in t2.bot_text
+    # El texto de la oferta lo genera el LLM (stubbeado); validamos el estado
+    # determinista: se seleccionó la promo de $100.
+    assert "100" in str(t2.raw.get("promo_elegida", "")), t2.raw.get("promo_elegida")
 
 
 async def test_qf03_numero_invalido_pide_diez_digitos(agente):
