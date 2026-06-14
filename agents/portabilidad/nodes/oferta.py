@@ -6,21 +6,18 @@ import re
 from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
-from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
     AMAZON_PRIME_BY_PACKAGE,
     ANTI_RENDICION,
-    ASL_CATALOG,
-    CHANNEL_RULES,
     CLARO_DRIVE_MUSICA,
     FORMAT_RULES,
     HARD_RULES,
     ID_DOCS_INFO,
     OFFER_TEMPLATE,
     PORTABILITY_SCHEDULE,
-    SALES_APPROACH,
 )
 from agents.portabilidad.state import PortabilidadState
+from agents.portabilidad.utils import render_prompt, split_msg
 from integrations.postgres import client as db
 
 logger = logging.getLogger(__name__)
@@ -72,7 +69,7 @@ _POSPAGO = [
 ]
 _CANALES_Q = ["recargar", "donde recargo", "dónde recargo", "pagar", "donde pago",
               "banco", "bancos", "walmart", "liverpool", "mixup", "oxxo", "cajero"]
-_HORARIO_Q = ["cuándo", "cuando", "cuanto tarda", "cuánto tarda", "tiempo", "horas",
+_HORARIO_Q = ["cuándo", "cuando", "cuanto tarda", "cuánto tarda", "horas",
               "portación", "portacion", "se ejecuta", "queda lista", "domingo"]
 _CAC_Q = ["cac", "centro de atención", "sucursal", "oficina telcel", "donde ir",
           "dónde ir", "presencial"]
@@ -345,7 +342,6 @@ async def oferta_node(state: PortabilidadState) -> dict:
 
     llm = get_llm()
     promos_text = "\n\n".join(_format_promo(p) for p in promos)
-    uso_str = datos.get("uso_predominante", "")
 
     system = render_prompt(
         "oferta_principal",

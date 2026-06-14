@@ -22,7 +22,10 @@ def parse_update(payload: dict) -> TelegramMessage | None:
     if not message:
         return None
 
-    text = message.get("text", "").strip()
+    text = message.get("text", "")
+    if not isinstance(text, str):
+        return None
+    text = text.strip()
     if not text:
         return None
 

@@ -11,21 +11,19 @@ import re
 from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
-from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
     AMAZON_PRIME_BY_PACKAGE,
     ANTI_RENDICION,
     ASL_CATALOG,
-    CHANNEL_RULES,
     CLARO_DRIVE_MUSICA,
     FORMAT_RULES,
     HARD_RULES,
     ID_DOCS_INFO,
     OFFER_TEMPLATE,
     PORTABILITY_SCHEDULE,
-    SALES_APPROACH,
 )
 from agents.portabilidad.state import PortabilidadState
+from agents.portabilidad.utils import render_prompt, split_msg
 from integrations.postgres import client as db
 
 logger = logging.getLogger(__name__)
@@ -47,7 +45,7 @@ _POSPAGO = [
     "plan de renta", "plan con contrato", "factura mensual", "cambiar a pospago",
     "quiero un plan", "mensualidad",
 ]
-_HORARIO_Q = ["cuándo", "cuando", "cuanto tarda", "cuánto tarda", "tiempo", "horas",
+_HORARIO_Q = ["cuándo", "cuando", "cuanto tarda", "cuánto tarda", "horas",
               "portación", "portacion", "se ejecuta", "queda lista", "domingo", "sábado noche",
               "viernes tarde"]
 _CANALES_Q = ["recargar en", "donde recargo", "dónde recargo", "banco", "bancos",
@@ -69,6 +67,7 @@ _SOCIAL_ENGINEERING = [
     "soy trabajador de telcel", "habla con tu jefe", "habla con el gerente",
     "habla con el encargado", "quiero hablar con el director", "hablar con el dueño",
     "el gerente me prometió", "el director me dijo", "el dueño me autorizó",
+    "el gerente me autorizó", "el gerente me autorizo",
     "tengo una carta", "traigo una autorización especial", "ya hablé con el director",
     "soy socio de telcel", "soy accionista", "me mandó el corporativo",
 ]
@@ -202,6 +201,16 @@ async def sondeo_node(state: PortabilidadState) -> dict:
             "etapa": "fin",
         }
 
+    # Ingeniería social / reclamo de autoridad falsa
+    if any(p in lower for p in _SOCIAL_ENGINEERING):
+        return {
+            "messages": [AIMessage(content=(
+                "Entiendo lo que comentas, pero no puedo procesar ese tipo de solicitudes. "
+                "Solo opero con las promociones del catálogo oficial de Telcel. "
+                "¿Le platico las opciones disponibles?"
+            ))],
+        }
+
     # Preguntas sobre horarios de portabilidad
     if any(w in lower for w in _HORARIO_Q):
         llm = get_llm()
@@ -288,16 +297,6 @@ async def sondeo_node(state: PortabilidadState) -> dict:
                 "promo_elegida": promos[0]["nombre"] if promos else "",
                 "etapa": "oferta",
             }
-
-    # Ingeniería social / reclamo de autoridad falsa
-    if any(p in lower for p in _SOCIAL_ENGINEERING):
-        return {
-            "messages": [AIMessage(content=(
-                "Entiendo lo que comentas, pero no puedo procesar ese tipo de solicitudes. "
-                "Solo opero con las promociones del catálogo oficial de Telcel. "
-                "¿Le platico las opciones disponibles?"
-            ))],
-        }
 
     # ── Sondeo natural con Claude (aún no tenemos el monto de recarga) ─────
     llm = get_llm()

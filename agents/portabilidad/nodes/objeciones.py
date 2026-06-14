@@ -1,13 +1,20 @@
 """Nodo de objeciones: rebate hasta 3 veces usando el banco de objeciones de la BD."""
 
 import logging
+import re
 
 from langchain_core.messages import AIMessage, SystemMessage
 
 from agents.llm import get_llm
-from agents.portabilidad.utils import render_prompt, split_msg
-from agents.portabilidad.context import ANTI_RENDICION, FORMAT_RULES, HARD_RULES, OBJECTIONS_BANK, OBJECTIONS_HANDLING
+from agents.portabilidad.context import (
+    ANTI_RENDICION,
+    FORMAT_RULES,
+    HARD_RULES,
+    OBJECTIONS_BANK,
+    OBJECTIONS_HANDLING,
+)
 from agents.portabilidad.state import PortabilidadState
+from agents.portabilidad.utils import render_prompt, split_msg
 from integrations.postgres import client as db
 
 logger = logging.getLogger(__name__)
@@ -16,7 +23,7 @@ _MAX_REBATES = 3
 _SENSITIVE = ["mamá", "papá", "murió", "falleció", "muerto", "difunto", "funeral"]
 _FRAUD_OFFER = ["primo", "familiar", "conocido", "compadre"]
 _FRAUD_CLAIM = ["prometió", "descuento especial", "80%", "90%", "gratis"]
-_BUY_WORDS = ["sí", "si ", "quiero", "acepto", "adelante", "ok", "dale", "listo",
+_BUY_WORDS = ["sí", "quiero", "acepto", "adelante", "dale", "listo",
               "me convenciste", "está bien", "va", "anótame"]
 _ESCALATION = ["asesor", "humano", "persona real", "agente", "supervisor"]
 _SEGUIMIENTO = [
@@ -33,6 +40,16 @@ _POSPAGO = [
     "plan de renta", "plan con contrato", "factura mensual", "cambiar a pospago",
     "mensualidad",
 ]
+_WORD_CHARS = "0-9a-záéíóúüñ"
+
+
+def _word_match(text_lower: str, terms: list[str]) -> bool:
+    """True si algún término aparece aislado, no como substring."""
+    for term in terms:
+        pattern = rf"(?<![{_WORD_CHARS}]){re.escape(term)}(?![{_WORD_CHARS}])"
+        if re.search(pattern, text_lower):
+            return True
+    return False
 
 
 async def _find_objection(text: str) -> dict | None:
@@ -141,7 +158,7 @@ async def objeciones_node(state: PortabilidadState) -> dict:
         }
 
     # Intención de compra → cerrar
-    if any(w in lower for w in _BUY_WORDS):
+    if _word_match(lower, _BUY_WORDS):
         return {
             "messages": [AIMessage(content="¡Perfecto! Vamos con los datos. ¿Cuál es tu nombre completo?")],
             "etapa": "cierre",
