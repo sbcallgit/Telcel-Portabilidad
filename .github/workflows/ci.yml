@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install freezegun redis ruff
+
+      - name: Ruff
+        run: |
+          ruff check \
+            tests/unit/test_auth_endpoints.py \
+            tests/unit/test_cierre_helpers.py \
+            tests/unit/test_escalate_helpers.py \
+            tests/unit/test_logging_helpers.py \
+            tests/unit/test_seguimientos_helpers.py \
+            tests/unit/test_validacion_helpers.py \
+            tests/unit/test_whatsapp_handlers.py
+
+      - name: Check dockerignore excludes env files
+        run: |
+          test -f .dockerignore
+          grep -Eq '(^|/)\.env($|[[:space:]])' .dockerignore
+          grep -Eq '(^|/)\.env\.\*($|[[:space:]])' .dockerignore
+
+      - name: Unit tests
+        env:
+          ENVIRONMENT: test
+          OPENROUTER_API_KEY: ""
+          WHATSAPP_TOKEN: ""
+          WHATSAPP_APP_SECRET: ""
+          TELEGRAM_BOT_TOKEN: ""
+          BITRIX_WEBHOOK_URL: ""
+          BITRIX_APPLICATION_TOKEN: ""
+          REDIS_URL: redis://offline.invalid:6379
+        run: pytest tests/unit -q
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
