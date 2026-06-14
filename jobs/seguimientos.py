@@ -1,22 +1,18 @@
 """Seguimientos automáticos de leads — APScheduler con zona horaria America/Monterrey.
 
 Fuente de verdad: leads.bitrix_stage (sincronizado desde Bitrix por job_bitrix_sync).
-Se envía seguimiento a todos los leads EXCEPTO los que están en C90:WON (venta cerrada).
 
-Cadencias por stage de Bitrix (minutos):
-  C90:NEW          30m · 2h · 23h
-  C90:PROSPECTO    4h · 23h · 46h
-  C90:SEGUIMIENTO  2h · 23h · 46h · 69h
-  C90:UC_8WB2DT    4h · 23h · 46h
-  C90:8            23h · 46h · 69h
-  C90:LOSE         46h · 92h
+Lógica vigente (sin cadencias por stage):
+  - Rescate 1: 30+ min de silencio del usuario, cualquier stage salvo C90:WON/1/2/3.
+  - Rescate 2: lead en C90:1 con 60+ min desde el Rescate 1.
+  - Rescate 3: lead en C90:2 con 60+ min → llamada Vicidial.
+Idempotencia: ventana de 4 min en seguimientos_log evita reenvíos.
 
 Ventana: L–S 9:00–21:00 America/Monterrey. Sin domingos.
-Límite: máximo 5 seguimientos por lead.
 """
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -36,19 +32,8 @@ MIN_RESCATE3 = 60        # minutos en C90:2 antes de disparar llamada Vicidial
 logger = logging.getLogger(__name__)
 
 TZ = pytz.timezone("America/Monterrey")
-MAX_SEGUIMIENTOS = 5
 VENTANA_INICIO = 9
 VENTANA_FIN = 21
-
-_CADENCIAS: dict[str, list[int]] = {
-    "C90:NEW":        [30, 120, 1380],
-    "C90:PROSPECTO":  [240, 1380, 2760],
-    "C90:SEGUIMIENTO":[120, 1380, 2760, 4140],
-    "C90:UC_8WB2DT":  [240, 1380, 2760],
-    "C90:8":          [1380, 2760, 4140],
-    "C90:LOSE":       [2760, 5520],
-}
-_CADENCIA_DEFAULT = [30, 120, 1380]
 
 _MENSAJES: dict[str, list[str]] = {
     "C90:NEW": [
@@ -96,16 +81,6 @@ def _en_ventana(ahora: datetime) -> bool:
     if local.weekday() == 6:
         return False
     return VENTANA_INICIO <= local.hour < VENTANA_FIN
-
-
-def _cadencia(bitrix_stage: str) -> list[int]:
-    return _CADENCIAS.get(bitrix_stage, _CADENCIA_DEFAULT)
-
-
-def _siguiente_envio(ultimo: datetime, cadencia: list[int], num_enviados: int) -> datetime | None:
-    if num_enviados >= len(cadencia) or num_enviados >= MAX_SEGUIMIENTOS:
-        return None
-    return ultimo + timedelta(minutes=cadencia[num_enviados])
 
 
 def _mensaje(bitrix_stage: str, numero_seq: int) -> str:
