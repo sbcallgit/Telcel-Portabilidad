@@ -31,9 +31,6 @@ dependencies = [
     "langchain-openai>=0.2.0",
     "openai>=1.50.0",
 
-    # Cola de mensajes
-    "arq>=0.26.0",
-
     # Jobs programados
     "apscheduler>=3.10.0",
     "pytz>=2024.1",

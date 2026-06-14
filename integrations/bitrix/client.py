@@ -58,7 +58,38 @@ class BitrixClient:
             logger.info("bitrix_deal_encontrado", extra={"phone_tail": tail, "deal_id": deal_id, "source": "openlines"})
             return deal_id
 
-        # Fallback: cualquier deal activo con ese teléfono (no ganado/perdido)
+        # Búsqueda precisa por contacto (teléfono COMPLETO) — evita la colisión por
+        # últimos 4 dígitos del fallback por título. Solo aplica si el deal ya tiene
+        # un contacto con teléfono vinculado.
+        try:
+            dup = await self._call("crm.duplicate.findbycomm", {
+                "type": "PHONE",
+                "values": [telefono],
+                "entity_type": "CONTACT",
+            })
+            dup_result = dup.get("result", {})
+            contact_ids = dup_result.get("CONTACT", []) if isinstance(dup_result, dict) else []
+            if contact_ids:
+                by_contact = await self._call("crm.deal.list", {
+                    "filter": {
+                        "CATEGORY_ID": settings.bitrix_pipeline_id,
+                        "CONTACT_ID": contact_ids[0],
+                        "!=STAGE_ID": ["C90:WON", "C90:LOSE"],
+                    },
+                    "order": {"DATE_CREATE": "DESC"},
+                    "select": ["ID", "STAGE_ID", "TITLE"],
+                    "start": 0,
+                })
+                c_items = by_contact.get("result", [])
+                if c_items:
+                    deal_id = str(c_items[0]["ID"])
+                    logger.info("bitrix_deal_encontrado", extra={"phone_tail": tail, "deal_id": deal_id, "source": "contact"})
+                    return deal_id
+        except Exception as exc:
+            logger.warning("bitrix_deal_contact_search_error", extra={"phone_tail": tail, "error": str(exc)})
+
+        # Último recurso: match por últimos 4 dígitos del título (puede colisionar
+        # entre teléfonos distintos — solo para deals sin source ni contacto).
         result2 = await self._call("crm.deal.list", {
             "filter": {
                 "CATEGORY_ID": settings.bitrix_pipeline_id,

@@ -1,4 +1,4 @@
-.PHONY: dev build down logs seed worker test lint format
+.PHONY: dev build down logs seed test lint format
 
 # Levanta todos los servicios en modo desarrollo (hot reload)
 dev:
@@ -28,10 +28,6 @@ logs:
 seed:
 	docker compose exec api python -m knowledge.seed
 
-# Levanta el worker de la cola de mensajes
-worker:
-	docker compose exec api python -m arq jobs.worker.WorkerSettings
-
 # Corre todos los tests con reporte de cobertura
 test:
 	docker compose exec api pytest tests/ -v --cov=. --cov-report=term-missing
@@ -46,9 +42,9 @@ format:
 	ruff format .
 	ruff check --fix .
 
-# Health check rápido
+# Health check rápido (el contenedor api mapea 8001:8000 al host)
 health:
-	curl -s http://localhost:8000/health | python -m json.tool
+	curl -s http://localhost:8001/health | python -m json.tool
 
 # Exporta kpi_conversaciones a CSV en /tmp/
 export_kpi:

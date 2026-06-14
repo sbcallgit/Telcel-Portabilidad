@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 _PHONE_RE = re.compile(r"(?<!\d)(\d{10})(?!\d)")
 _LADA_RE = re.compile(r"\b(\d{3})\b")
-_ESCALATION_WORDS = ["asesor", "humano", "persona real", "agente", "supervisor"]
+_ESCALATION_WORDS = ["asesor", "asesores", "humano", "persona real", "agente", "agentes", "supervisor"]
 _SENSITIVE_WORDS = ["murió", "falleció", "muerto", "difunto", "funeral", "accidente", "emergencia"]
 _SEGUIMIENTO = [
     "llámame después", "llamame despues", "llámame mañana", "llamame mañana",
@@ -66,6 +66,26 @@ _SOCIAL_ENGINEERING = [
 ]
 _FUERA_R4 = ["cancún", "cancun", "mérida", "merida", "guadalajara", "ciudad de méxico",
              "cdmx", "monterrreyyyy"]
+
+
+# Caracteres considerados "de palabra" para el matching con frontera (incluye
+# acentos y dígitos). Un término hace match solo si no está pegado a otro de estos.
+_WORD_CHARS = "0-9a-záéíóúüñ"
+
+
+def _word_match(text_lower: str, terms: list[str]) -> bool:
+    """True si algún término aparece como token aislado en text_lower.
+
+    Usa lookarounds en vez de \\b para soportar frases ("persona real") y
+    términos con símbolos finales ("80%"). Evita los falsos positivos del
+    'substring in' (p. ej. 'agente' dentro de otra palabra).
+    text_lower y terms se asumen en minúsculas.
+    """
+    for term in terms:
+        pattern = rf"(?<![{_WORD_CHARS}]){re.escape(term)}(?![{_WORD_CHARS}])"
+        if re.search(pattern, text_lower):
+            return True
+    return False
 
 
 def _count_digits(text: str) -> int:
@@ -204,7 +224,7 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
         }
 
     # Caso sensible
-    if any(w in lower for w in _SENSITIVE_WORDS):
+    if _word_match(lower, _SENSITIVE_WORDS):
         return {
             "messages": [AIMessage(content=(
                 "Lamentamos mucho lo que estás pasando. "
@@ -215,7 +235,7 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
         }
 
     # Solicitud directa de asesor
-    if any(w in lower for w in _ESCALATION_WORDS):
+    if _word_match(lower, _ESCALATION_WORDS):
         return {
             "messages": [AIMessage(content="Claro, ahora mismo te conecto con un asesor. ¿Me dices tu nombre?")],
             "escalate_to_human": True,
@@ -223,7 +243,7 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
         }
 
     # Pospago → derivar a CAC presencial
-    if any(w in lower for w in _POSPAGO):
+    if _word_match(lower, _POSPAGO):
         return {
             "messages": [AIMessage(content=(
                 "Para planes de renta mensual (pospago) le invito a acudir a un CAC Telcel "
@@ -235,7 +255,7 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
     # Fraude
     _fraud_offer = ["primo", "familiar", "conocido", "compadre"]
     _fraud_claim = ["prometió", "descuento especial", "80%", "90%", "me dijo", "gratis me"]
-    if any(w in lower for w in _fraud_offer) and any(w in lower for w in _fraud_claim):
+    if _word_match(lower, _fraud_offer) and _word_match(lower, _fraud_claim):
         return {
             "messages": [AIMessage(content=(
                 "Solo puedo ofrecerle las promociones del catálogo oficial de Telcel. "
@@ -483,7 +503,7 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
         }
 
     # Ingeniería social / reclamo de autoridad falsa
-    if any(p in lower for p in _SOCIAL_ENGINEERING):
+    if _word_match(lower, _SOCIAL_ENGINEERING):
         return {
             "messages": [AIMessage(content=(
                 "Entiendo lo que comentas, pero no puedo procesar ese tipo de solicitudes. "
