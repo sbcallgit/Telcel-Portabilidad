@@ -58,11 +58,11 @@ class Settings(BaseSettings):
     seguimientos_test_phone: str = ""  # Si está definido, el job solo procesa ese teléfono
 
     # Vicidial — marcador predictivo (tercer seguimiento)
-    vicidial_url: str = "http://189.209.207.222/vicidial/non_agent_api.php"
-    vicidial_user: str = "api_n8n"
-    vicidial_pass: str = "key2-Fit"
-    vicidial_list_id: str = "101"
-    vicidial_campaign_id: str = "n8n_port"
+    vicidial_url: str = ""
+    vicidial_user: str = ""
+    vicidial_pass: str = ""
+    vicidial_list_id: str = ""
+    vicidial_campaign_id: str = ""
 
     # App
     app_version: str = "1.0.0"
