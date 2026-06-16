@@ -334,6 +334,10 @@ async def _procesar_lead(row: dict) -> None:
     deal_id = row.get("bitrix_lead_id") or ""
     num_enviados = row["seguimientos_enviados"] or 0
 
+    if num_enviados >= MAX_SEGUIMIENTOS:
+        logger.info("seguimiento_skip_max", extra={"lead_id": lead_id, "enviados": num_enviados})
+        return
+
     ahora = datetime.now(tz=TZ)
     if not _en_ventana(ahora):
         return
