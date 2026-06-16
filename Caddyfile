@@ -6,7 +6,7 @@ rag-portabilidad.callcomcc.io {
 
     # API Key auth simple (opcional)
     @noauth {
-        not header Authorization "Bearer a3f8c2e1d4b7a9f0e2c5d8b1a4f7c0e3d6b9a2f5c8e1d4b7a0f3c6e9d2b5a8f1"
+        not header Authorization "Bearer {env.RAG_BEARER_TOKEN}"
         not path /health
     }
     respond @noauth 401 {
@@ -36,7 +36,7 @@ qdrant-portabilidad.callcomcc.io {
     }
 
     basic_auth {
-        admin $2a$14$4SgGQuXZnaeTmEiqTiDLwObujdWkF7hXbOGhxPOXKVmZl5dL5KzwK
+        admin {env.QDRANT_ADMIN_PASSWORD_HASH}
     }
 
     header {
