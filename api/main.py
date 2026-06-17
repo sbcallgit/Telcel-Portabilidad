@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, Response
 
 from api.routes.admin import router as admin_router
 from api.routes.bitrix import router as bitrix_router
+from api.routes.bitrix_bot_control import router as bitrix_bot_control_router
 from api.routes.connector import router as connector_router
 from api.routes.health import router as health_router
 from api.routes.telegram import router as telegram_router
@@ -95,5 +96,6 @@ app.include_router(health_router)
 app.include_router(webhooks_router)
 app.include_router(telegram_router)
 app.include_router(bitrix_router)
+app.include_router(bitrix_bot_control_router)
 app.include_router(connector_router)
 app.include_router(admin_router)

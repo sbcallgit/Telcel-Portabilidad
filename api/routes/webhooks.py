@@ -127,6 +127,12 @@ async def receive_message(request: Request) -> dict:
     except Exception as exc:
         logger.error("connector_user_msg_failed", extra={"error": str(exc)})
 
+    # Guard: si el bot está pausado para este número, el asesor gestiona el chat
+    bot_pausado_key = f"bot_pausado:{phone}"
+    if await redis.get(bot_pausado_key):
+        logger.info("webhook_bot_pausado", extra={"phone_tail": phone[-4:]})
+        return {"status": "bot_pausado"}
+
     # Encolar con debounce — retorna inmediatamente; el agente corre en background
     await debounce.enqueue(phone, text, settings.debounce_window_ms, _process_message)
 
