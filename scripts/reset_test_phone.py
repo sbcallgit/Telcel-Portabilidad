@@ -15,6 +15,10 @@ Limpia:
 import asyncio
 import logging
 import sys
+from pathlib import Path
+
+# Asegurar que el root del proyecto esté en el path cuando se corre desde /app/scripts/
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 log = logging.getLogger(__name__)

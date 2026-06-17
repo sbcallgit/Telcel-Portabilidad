@@ -16,7 +16,7 @@ Si `$ARGUMENTS` está vacío, pide el teléfono al usuario antes de continuar.
 ### Ejecutar el script de limpieza
 
 ```bash
-docker compose exec api python scripts/reset_test_phone.py $ARGUMENTS
+docker compose exec -w /app api python scripts/reset_test_phone.py $ARGUMENTS
 ```
 
 El script limpia en este orden:
