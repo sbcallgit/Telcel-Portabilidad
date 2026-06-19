@@ -31,7 +31,7 @@ STAGE_RESCATE2 = "C90:2"
 STAGE_RESCATE3 = "C90:3"
 MIN_SILENCIO = 30        # minutos sin mensaje del usuario antes de enviar seguimiento
 MIN_RESCATE2 = 60        # minutos en C90:1 antes de enviar Rescate 2
-MIN_RESCATE3 = 60        # minutos en C90:2 antes de disparar llamada Vicidial
+MIN_RESCATE3 = 120       # minutos en C90:2 antes de disparar llamada Vicidial
 
 logger = logging.getLogger(__name__)
 
