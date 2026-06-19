@@ -89,9 +89,15 @@ async def limpiar_postgres(phone: str) -> None:
 
     log.info(f"PostgreSQL checkpoints: {cp_total} filas eliminadas")
 
-    # Tabla leads
+    # Tablas dependientes de leads (foreign keys) y luego leads
     leads_total = 0
     for v in variantes:
+        # Obtener IDs para borrar registros dependientes primero
+        lead_ids = await conn.fetch("SELECT id FROM leads WHERE telefono = $1", v)
+        for row in lead_ids:
+            lid = row["id"]
+            await conn.execute("DELETE FROM seguimientos_log WHERE lead_id = $1", lid)
+            await conn.execute("DELETE FROM seguimientos_fallidos WHERE lead_id = $1", lid)
         n = await conn.execute("DELETE FROM leads WHERE telefono = $1", v)
         leads_total += int(n.split()[-1])
 
