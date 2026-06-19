@@ -125,13 +125,17 @@ def _format_cacs(cacs: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-async def _upsert_lead(phone: str, deal_id: str) -> None:
-    """Crea o actualiza el registro en leads cuando se confirma el teléfono del cliente."""
+async def _upsert_lead_primer_contacto(sender_phone: str, deal_id: str) -> None:
+    """Crea el registro en leads al primer mensaje usando el teléfono del remitente.
+
+    Garantiza que cualquier usuario que contacte al bot queda registrado para seguimientos,
+    sin importar si llega a dar su número a portar.
+    """
     try:
         await db.execute(
             """
             INSERT INTO leads (telefono, bitrix_lead_id, etapa)
-            VALUES ($1, $2, 'sondeo')
+            VALUES ($1, $2, 'validacion')
             ON CONFLICT (telefono) DO UPDATE SET
                 bitrix_lead_id = CASE
                     WHEN leads.bitrix_lead_id = '' THEN EXCLUDED.bitrix_lead_id
@@ -139,10 +143,27 @@ async def _upsert_lead(phone: str, deal_id: str) -> None:
                 END,
                 updated_at = NOW()
             """,
-            phone, deal_id,
+            sender_phone, deal_id,
         )
     except Exception as exc:
-        logger.warning("upsert_lead_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+        logger.warning("upsert_lead_primer_contacto_error", extra={"phone_tail": sender_phone[-4:], "error": str(exc)})
+
+
+async def _upsert_lead(numero: str, sender_phone: str) -> None:
+    """Actualiza numero_a_portar y avanza etapa a sondeo cuando el cliente da su número."""
+    try:
+        await db.execute(
+            """
+            UPDATE leads SET
+                numero_a_portar = $1,
+                etapa = 'sondeo',
+                updated_at = NOW()
+            WHERE telefono = $2
+            """,
+            numero, sender_phone,
+        )
+    except Exception as exc:
+        logger.warning("upsert_lead_error", extra={"phone_tail": sender_phone[-4:], "error": str(exc)})
 
 
 async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
@@ -356,8 +377,8 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
             }
 
         if lada_info["habilitada"]:
-            deal_id = state.get("bitrix_lead_id") or ""
-            await _upsert_lead(numero, deal_id)
+            sender_phone = state.get("session_id") or ""
+            await _upsert_lead(numero, sender_phone)
             return {
                 "messages": [AIMessage(content=(
                     f"¡Listo! Tu zona ({lada_info['ciudad']}, {lada_info['estado']}) "
@@ -528,6 +549,12 @@ async def validacion_node(state: PortabilidadState) -> dict:
 
     # Crear deal en Bitrix al primer contacto (no bloquea si falla)
     deal_update = await _crear_deal_primer_contacto(state)
+
+    # Registrar lead con teléfono del remitente desde el primer mensaje
+    sender_phone = state.get("session_id") or ""
+    deal_id = deal_update.get("bitrix_lead_id") or state.get("bitrix_lead_id") or ""
+    if sender_phone:
+        await _upsert_lead_primer_contacto(sender_phone, deal_id)
 
     # Ejecutar lógica de validación y fusionar con el deal_id recién creado
     result = await _validacion_logic(state, messages)

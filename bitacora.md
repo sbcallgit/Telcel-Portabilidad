@@ -2,6 +2,50 @@
 
 ---
 
+## 2026-06-19
+
+### Seguimientos: registro de lead desde el primer mensaje
+
+**Archivos modificados:** `agents/portabilidad/nodes/validacion.py`
+
+**Problema:** el lead solo se creaba en la tabla `leads` cuando el usuario proporcionaba su número de 10 dígitos y la LADA era válida. Cualquier usuario que contactara al bot sin dar su número (solo "hola", preguntas de precio, etc.) nunca quedaba registrado y quedaba fuera del flujo de seguimientos automáticos.
+
+**Solución:**
+- Nueva función `_upsert_lead_primer_contacto(sender_phone, deal_id)`: inserta el lead con `telefono = sender_phone` (teléfono del remitente WhatsApp/Telegram) al primer mensaje, usando `ON CONFLICT DO UPDATE` para idempotencia.
+- `_upsert_lead(numero, sender_phone)`: modificada para ya no insertar un registro nuevo con el número portado, sino actualizar `numero_a_portar` en la fila existente del remitente.
+- `validacion_node`: llama `_upsert_lead_primer_contacto` en cada mensaje, justo después de `_crear_deal_primer_contacto`, usando `state.get("session_id")` como teléfono del remitente.
+
+**Resultado:** cualquier usuario que contacte al bot queda registrado para seguimientos desde el primer mensaje, sin importar en qué etapa quede la conversación.
+
+---
+
+### Seguimientos: Rescate 3 requiere 2 horas en C90:2
+
+**Archivos modificados:** `jobs/seguimientos.py`
+
+- `MIN_RESCATE3` aumentado de 60 a **120 minutos** — el job ahora espera 2 horas desde que el lead entró a C90:2 antes de disparar la llamada a Vicidial.
+
+---
+
+### Prueba de flujo completo Rescate 1 → 2 → 3
+
+- Validado el flujo completo end-to-end: Rescate 1 (mensaje WhatsApp + deal a C90:1), Rescate 2 (mensaje WhatsApp + deal a C90:2), Rescate 3 (llamada Vicidial real confirmada con `SUCCESS: add_lead`).
+- Vicidial acepta el número como los últimos 10 dígitos del teléfono (`phone[-10:]`).
+- Endpoint `/admin/vicidial-test` con `simulate=false` operativo.
+
+---
+
+### Skill `/reset-test` — limpieza de teléfonos de prueba
+
+**Archivos modificados:** `.claude/commands/reset-test.md`, `scripts/reset_test_phone.py`
+
+- Nueva skill `/reset-test <telefono>` que limpia Redis, checkpoints PostgreSQL, leads, deals y contacto en Bitrix en un solo comando.
+- El script corre dentro del contenedor `api` con `docker compose exec -w /app api python scripts/reset_test_phone.py <telefono>`.
+- Soporta variantes del teléfono (con/sin prefijo 52, con/sin 1) para borrar checkpoints de cualquier formato.
+- Los tokens OAuth de Bitrix (`bitrix:oauth_tokens`) no se tocan.
+
+---
+
 ## 2026-06-16
 
 ### Seguridad: externalizar credenciales hardcodeadas a variables de entorno
