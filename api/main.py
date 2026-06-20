@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.admin import router as admin_router
 from api.routes.bitrix import router as bitrix_router
@@ -72,6 +73,13 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/docs" if settings.environment == "development" else None,
     redoc_url=None,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://kpi.callcomcc.io", "http://localhost:4200"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["X-Admin-Token", "Content-Type"],
 )
 
 

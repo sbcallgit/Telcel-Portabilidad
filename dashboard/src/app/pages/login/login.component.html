@@ -1,0 +1,31 @@
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="logo">
+      <span class="logo-dot"></span>
+      <span class="logo-text">Telcel Portabilidad</span>
+    </div>
+    <h1>Dashboard KPI</h1>
+    <p class="subtitle">Ingresa tu token de administrador para continuar.</p>
+
+    <form (ngSubmit)="login()">
+      <div class="field">
+        <label for="token">Admin Token</label>
+        <input
+          id="token"
+          type="password"
+          [(ngModel)]="token"
+          name="token"
+          placeholder="••••••••••••"
+          autocomplete="current-password"
+          [disabled]="loading"
+        />
+      </div>
+      @if (error) {
+        <p class="error">{{ error }}</p>
+      }
+      <button type="submit" [disabled]="loading || !token">
+        @if (loading) { Verificando... } @else { Ingresar }
+      </button>
+    </form>
+  </div>
+</div>

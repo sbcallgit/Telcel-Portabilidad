@@ -1,0 +1,176 @@
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <span class="dot"></span>
+      <span>KPI Dashboard</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item active" routerLink="/dashboard">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Resumen
+      </a>
+      <a class="nav-item" routerLink="/analytics">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        Analytics
+      </a>
+    </nav>
+    <button class="logout-btn" (click)="logout()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      Cerrar sesión
+    </button>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 class="page-title">Conversaciones</h1>
+        <p class="page-sub">Telcel Portabilidad · Región 4 · Muévete Prepago</p>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn-secondary" (click)="triggerExport()" [disabled]="exportLoading">
+          @if (exportLoading) { Exportando... } @else { Exportar CSV }
+        </button>
+        @if (exportMsg) { <span class="export-msg">{{ exportMsg }}</span> }
+      </div>
+    </header>
+
+    <!-- Filtros -->
+    <div class="filters">
+      <div class="filter-group">
+        <label>Desde</label>
+        <input type="date" [(ngModel)]="desde" />
+      </div>
+      <div class="filter-group">
+        <label>Hasta</label>
+        <input type="date" [(ngModel)]="hasta" />
+      </div>
+      <div class="filter-group">
+        <label>Stage</label>
+        <select [(ngModel)]="stageFilter">
+          @for (opt of stageOptions; track opt.value) {
+            <option [value]="opt.value">{{ opt.label }}</option>
+          }
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Buscar</label>
+        <input type="text" [(ngModel)]="search" placeholder="Teléfono, asesor, resumen…" (keyup.enter)="applyFilter()" />
+      </div>
+      <button class="btn-primary" (click)="applyFilter()">Filtrar</button>
+      <button class="btn-ghost" (click)="clearFilter()">Limpiar</button>
+    </div>
+
+    @if (loading) {
+      <div class="loading-wrap">
+        <div class="spinner"></div>
+        <span>Cargando datos…</span>
+      </div>
+    } @else if (error) {
+      <div class="alert-error">{{ error }}</div>
+    } @else {
+
+      <!-- KPI Cards -->
+      <div class="cards">
+        <div class="card">
+          <p class="card-label">Total conversaciones</p>
+          <p class="card-value">{{ resumen?.total_conversaciones | number }}</p>
+        </div>
+        <div class="card card--success">
+          <p class="card-label">Conversiones (Venta)</p>
+          <p class="card-value">{{ resumen?.conversiones | number }}</p>
+          <p class="card-sub">{{ resumen?.tasa_conversion }}% tasa</p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">Tiempo 1ª respuesta</p>
+          <p class="card-value">{{ formatSecs(resumen?.avg_primera_respuesta_segs ?? null) }}</p>
+          <p class="card-sub">promedio</p>
+        </div>
+        <div class="card card--warning">
+          <p class="card-label">Escalados a asesor</p>
+          <p class="card-value">{{ resumen?.escalados | number }}</p>
+          <p class="card-sub">con asesor humano</p>
+        </div>
+      </div>
+
+      <!-- Gráficas -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <h3>Distribución por etapa</h3>
+          <div class="chart-wrap">
+            <canvas #stageChart></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3>Mensajes por actor</h3>
+          <div class="chart-wrap">
+            <canvas #msgChart></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabla -->
+      <div class="table-card">
+        <div class="table-header">
+          <h3>Conversaciones recientes</h3>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Teléfono</th>
+                <th>Stage</th>
+                <th>Asesor</th>
+                <th>Inicio</th>
+                <th>Msgs Bot</th>
+                <th>Msgs Cliente</th>
+                <th>Msgs Asesor</th>
+                <th>1ª Resp.</th>
+                <th>Resumen</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of filteredConversaciones; track c.id_conversacion) {
+                <tr>
+                  <td class="mono">{{ c.telefono || '—' }}</td>
+                  <td><span class="badge" [attr.data-stage]="c.estado_actual">{{ stageLabel(c.estado_actual) }}</span></td>
+                  <td>{{ c.empleado || '—' }}</td>
+                  <td class="date">{{ c.creado_el ? (c.creado_el | date:'dd/MM/yy HH:mm') : '—' }}</td>
+                  <td class="num">{{ c.mensajes_bot }}</td>
+                  <td class="num">{{ c.mensajes_cliente }}</td>
+                  <td class="num">{{ c.mensajes_humano }}</td>
+                  <td class="num">{{ formatSecs(c.tiempo_primera_respuesta_segs) }}</td>
+                  <td class="resumen-cell" [title]="c.resumen">{{ c.resumen || '—' }}</td>
+                </tr>
+              }
+              @empty {
+                <tr><td colspan="9" class="empty">Sin conversaciones en este rango.</td></tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Paginación -->
+        <div class="pagination">
+          <span class="pg-info">
+            {{ (paginacion.page - 1) * paginacion.page_size + 1 }}–{{ minVal(paginacion.page * paginacion.page_size, paginacion.total) }}
+            de {{ paginacion.total | number }}
+          </span>
+          <div class="pg-btns">
+            <button (click)="goPage(1)" [disabled]="paginacion.page === 1">&laquo;</button>
+            <button (click)="goPage(paginacion.page - 1)" [disabled]="paginacion.page === 1">&lsaquo;</button>
+            @for (p of pages; track p) {
+              <button (click)="goPage(p)" [class.active]="p === paginacion.page">{{ p }}</button>
+            }
+            <button (click)="goPage(paginacion.page + 1)" [disabled]="paginacion.page === paginacion.total_pages">&rsaquo;</button>
+            <button (click)="goPage(paginacion.total_pages)" [disabled]="paginacion.page === paginacion.total_pages">&raquo;</button>
+          </div>
+        </div>
+      </div>
+
+    }
+  </main>
+</div>

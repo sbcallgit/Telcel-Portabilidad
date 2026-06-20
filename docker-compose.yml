@@ -51,6 +51,16 @@ services:
       - portabilidad_net
     restart: unless-stopped
 
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    networks:
+      - portabilidad_net
+    depends_on:
+      - api
+
   qdrant:
     image: qdrant/qdrant:latest
     container_name: bot_telcel_qdrant

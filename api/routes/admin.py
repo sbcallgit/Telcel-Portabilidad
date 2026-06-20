@@ -2,8 +2,12 @@
 
 import asyncio
 import logging
+import math
+from decimal import Decimal
+from datetime import date
+from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -26,6 +30,123 @@ class SeguimientoTestRequest(BaseModel):
 class VicidialTestRequest(BaseModel):
     telefono: str
     simulate: bool = False  # True = omite llamada real, simula éxito y mueve a C90:3
+
+
+@router.get("/kpi-data")
+async def get_kpi_data(
+    x_admin_token: str = Header(...),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    desde: Optional[date] = Query(None, description="Fecha ISO inicio (YYYY-MM-DD)"),
+    hasta: Optional[date] = Query(None, description="Fecha ISO fin (YYYY-MM-DD)"),
+    stage: Optional[str] = Query(None, description="Filtrar por estado_actual (ej. C90:WON)"),
+    buscar: Optional[str] = Query(None, description="Búsqueda por teléfono o empleado"),
+) -> JSONResponse:
+    """Expone KPIs de kpi_conversaciones para el dashboard Angular."""
+    _check_token(x_admin_token)
+
+    from integrations.postgres import client as db
+
+    filtros = []
+    params: list = []
+    idx = 1
+
+    if desde:
+        filtros.append(f"creado_el >= ${idx}::date")
+        params.append(desde)
+        idx += 1
+    if hasta:
+        filtros.append(f"creado_el < ${idx}::date + interval '1 day'")
+        params.append(hasta)
+        idx += 1
+    if stage:
+        filtros.append(f"estado_actual = ${idx}")
+        params.append(stage)
+        idx += 1
+    if buscar:
+        filtros.append(f"(telefono ILIKE ${idx} OR empleado ILIKE ${idx} OR resumen ILIKE ${idx})")
+        params.append(f"%{buscar}%")
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(filtros)) if filtros else ""
+
+    resumen_row = await db.fetchrow(
+        f"""
+        SELECT
+            COUNT(*)                                                  AS total,
+            COUNT(*) FILTER (WHERE estado_actual = 'C90:WON')        AS conversiones,
+            ROUND(AVG(tiempo_primera_respuesta_segs) FILTER
+                  (WHERE tiempo_primera_respuesta_segs IS NOT NULL
+                     AND tiempo_primera_respuesta_segs > 0), 1)       AS avg_primera_resp,
+            COALESCE(SUM(mensajes_cliente), 0)                        AS total_msgs_cliente,
+            COALESCE(SUM(mensajes_bot), 0)                            AS total_msgs_bot,
+            COALESCE(SUM(mensajes_humano), 0)                         AS total_msgs_humano,
+            COUNT(*) FILTER (WHERE mensajes_humano > 0)               AS escalados
+        FROM kpi_conversaciones {where}
+        """,
+        *params,
+    )
+
+    total = resumen_row["total"] or 0
+    conversiones = resumen_row["conversiones"] or 0
+    tasa = round(conversiones / total * 100, 1) if total > 0 else 0.0
+
+    por_stage = await db.fetch(
+        f"""
+        SELECT estado_actual AS stage, COUNT(*) AS cantidad
+        FROM kpi_conversaciones {where}
+        GROUP BY estado_actual
+        ORDER BY cantidad DESC
+        """,
+        *params,
+    )
+
+    offset = (page - 1) * page_size
+    lista_params = params + [page_size, offset]
+    conversaciones = await db.fetch(
+        f"""
+        SELECT
+            id_conversacion, telefono, estado_actual, etapa, empleado,
+            creado_el, cerrado_el, mensajes_cliente, mensajes_bot, mensajes_humano,
+            tiempo_primera_respuesta_segs, resumen
+        FROM kpi_conversaciones {where}
+        ORDER BY creado_el DESC NULLS LAST
+        LIMIT ${idx} OFFSET ${idx + 1}
+        """,
+        *lista_params,
+    )
+
+    def _fmt(row: dict) -> dict:
+        result = {}
+        for k, v in row.items():
+            if hasattr(v, "isoformat"):
+                result[k] = v.isoformat()
+            elif isinstance(v, Decimal):
+                result[k] = float(v)
+            else:
+                result[k] = v
+        return result
+
+    return JSONResponse({
+        "resumen": {
+            "total_conversaciones": total,
+            "conversiones": conversiones,
+            "tasa_conversion": tasa,
+            "avg_primera_respuesta_segs": float(resumen_row["avg_primera_resp"] or 0),
+            "total_msgs_cliente": int(resumen_row["total_msgs_cliente"] or 0),
+            "total_msgs_bot": int(resumen_row["total_msgs_bot"] or 0),
+            "total_msgs_humano": int(resumen_row["total_msgs_humano"] or 0),
+            "escalados": int(resumen_row["escalados"] or 0),
+        },
+        "por_stage": [{"stage": r["stage"] or "Sin stage", "cantidad": r["cantidad"]} for r in por_stage],
+        "conversaciones": [_fmt(dict(r)) for r in conversaciones],
+        "paginacion": {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": max(1, math.ceil(total / page_size)),
+        },
+    })
 
 
 @router.post("/kpi-export")

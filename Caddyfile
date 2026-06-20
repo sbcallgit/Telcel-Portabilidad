@@ -45,6 +45,34 @@ qdrant-portabilidad.callcomcc.io {
 }
 
 
+# KPI Dashboard (Angular)
+kpi.callcomcc.io {
+    # Proxy /api/* → FastAPI
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy api:8000 {
+            header_up Host {upstream_hostport}
+        }
+    }
+
+    # Todo lo demás → dashboard Angular (SPA)
+    handle {
+        reverse_proxy dashboard:80 {
+            header_up Host {upstream_hostport}
+        }
+    }
+
+    header {
+        -Server
+    }
+
+    log {
+        output file /data/logs/kpi.log
+        format json
+    }
+}
+
+
 # Telegram webhook + API
 telegram-portabilidad.callcomcc.io {
     reverse_proxy api:8001 {
