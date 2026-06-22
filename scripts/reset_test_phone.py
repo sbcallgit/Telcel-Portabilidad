@@ -46,19 +46,21 @@ async def limpiar_redis(phone: str) -> None:
     from config.settings import settings
 
     r = aioredis.from_url(settings.redis_url, decode_responses=True)
-    patrones = [
-        f"debounce:msgs:{phone}",
-        f"debounce:token:{phone}",
-        f"connector_ext_chat:{phone}",
-        f"connector_session:{phone}",
-        f"connector_chat:{phone}",
-        f"connector_deal:{phone}",
-        f"connector_last_msg:{phone}",
-        f"bot_pausado:{phone}",
-        f"wa_processed:*",   # dedup general (no filtra por phone, es global)
-    ]
+    # Normalizar igual que _variantes para que los patrones coincidan con las llaves reales
+    variantes = _variantes(phone)
     total = 0
-    for patron in patrones[:-1]:  # los directos los borra sin SCAN
+    prefijos = [
+        "debounce:msgs",
+        "debounce:token",
+        "connector_ext_chat",
+        "connector_session",
+        "connector_chat",
+        "connector_deal",
+        "connector_last_msg",
+        "bot_pausado",
+    ]
+    patrones = [f"{p}:{v}" for p in prefijos for v in variantes]
+    for patron in patrones:  # los directos los borra sin SCAN
         n = await r.delete(patron)
         if n:
             log.info(f"  Redis DEL {patron}")
