@@ -162,7 +162,8 @@ def _send_smtp(subject: str, html: str, csv_bytes: bytes, fecha_archivo: str) ->
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = settings.smtp_user
-    msg["To"] = settings.report_email_to
+    recipients = [r.strip() for r in settings.report_email_to.split(",") if r.strip()]
+    msg["To"] = ", ".join(recipients)
 
     msg.attach(MIMEText(html, "html", "utf-8"))
 
@@ -180,7 +181,7 @@ def _send_smtp(subject: str, html: str, csv_bytes: bytes, fecha_archivo: str) ->
     ctx = ssl.create_default_context()
     with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, context=ctx) as server:
         server.login(settings.smtp_user, settings.smtp_pass)
-        server.sendmail(settings.smtp_user, settings.report_email_to, msg.as_bytes())
+        server.sendmail(settings.smtp_user, recipients, msg.as_bytes())
 
 
 async def send_kpi_report() -> None:
