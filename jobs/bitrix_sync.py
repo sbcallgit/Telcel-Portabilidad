@@ -39,7 +39,7 @@ async def _fire_capi_if_needed(lead_id: int, stage_nuevo: str, stage_anterior: s
 
     try:
         row = await db.fetchrow(
-            "SELECT telefono, bitrix_lead_id, recarga_habitual, ctwa_clid FROM leads WHERE id = $1",
+            "SELECT telefono, bitrix_lead_id, recarga_habitual, ctwa_clid, nombre, municipio FROM leads WHERE id = $1",
             lead_id,
         )
         if not row:
@@ -53,12 +53,16 @@ async def _fire_capi_if_needed(lead_id: int, stage_nuevo: str, stage_anterior: s
                 deal_id=row["bitrix_lead_id"],
                 recarga=float(row["recarga_habitual"] or 0),
                 ctwa_clid=row["ctwa_clid"] or "",
+                nombre=row["nombre"] or "",
+                municipio=row["municipio"] or "",
             )
         elif stage_nuevo == "C90:PROSPECTO":
             await send_lead_event(
                 phone=row["telefono"],
                 deal_id=row["bitrix_lead_id"],
                 ctwa_clid=row["ctwa_clid"] or "",
+                nombre=row["nombre"] or "",
+                municipio=row["municipio"] or "",
             )
     except Exception as exc:
         logger.warning("capi_dispatch_error", extra={"lead_id": lead_id, "error": str(exc)})
