@@ -152,4 +152,15 @@ ALTER TABLE leads
   ADD COLUMN IF NOT EXISTS bitrix_stage VARCHAR(50) NOT NULL DEFAULT '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS leads_telefono_uq ON leads(telefono);
+
+-- Usuarios del dashboard KPI
+CREATE TABLE IF NOT EXISTS dashboard_users (
+    id SERIAL PRIMARY KEY,
+    email TEXT NOT NULL UNIQUE,
+    nombre TEXT NOT NULL DEFAULT '',
+    password_hash TEXT NOT NULL,
+    activo BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_login TIMESTAMPTZ
+);
 """

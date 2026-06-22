@@ -54,7 +54,7 @@ export class KpiService {
   private auth = inject(AuthService);
 
   private get headers(): HttpHeaders {
-    return new HttpHeaders({ 'X-Admin-Token': this.auth.getToken() });
+    return new HttpHeaders({ 'Authorization': `Bearer ${this.auth.getToken()}` });
   }
 
   getData(page = 1, pageSize = 20, desde?: string, hasta?: string, stage?: string, buscar?: string): Observable<KpiData> {

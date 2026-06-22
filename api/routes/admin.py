@@ -7,19 +7,17 @@ from decimal import Decimal
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from typing import Annotated
 
-from config.settings import settings
+from api.deps import require_auth
 
 router = APIRouter(prefix="/admin")
 logger = logging.getLogger(__name__)
 
-
-def _check_token(x_admin_token: str) -> None:
-    if x_admin_token != settings.admin_token:
-        raise HTTPException(status_code=403, detail="forbidden")
+AuthDep = Annotated[None, Depends(require_auth)]
 
 
 class SeguimientoTestRequest(BaseModel):
@@ -34,7 +32,7 @@ class VicidialTestRequest(BaseModel):
 
 @router.get("/kpi-data")
 async def get_kpi_data(
-    x_admin_token: str = Header(...),
+    _: AuthDep,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     desde: Optional[date] = Query(None, description="Fecha ISO inicio (YYYY-MM-DD)"),
@@ -43,7 +41,6 @@ async def get_kpi_data(
     buscar: Optional[str] = Query(None, description="Búsqueda por teléfono o empleado"),
 ) -> JSONResponse:
     """Expone KPIs de kpi_conversaciones para el dashboard Angular."""
-    _check_token(x_admin_token)
 
     from integrations.postgres import client as db
 
@@ -150,13 +147,12 @@ async def get_kpi_data(
 
 
 @router.post("/kpi-export")
-async def trigger_kpi_export(x_admin_token: str = Header(...)) -> JSONResponse:
+async def trigger_kpi_export(_: AuthDep) -> JSONResponse:
     """Dispara el job de exportación de KPIs de forma inmediata.
 
     Corre en el mismo proceso FastAPI, con el checkpointer PostgreSQL y tokens
     OAuth ya activos. Útil para regenerar la tabla sin esperar las 3am.
     """
-    _check_token(x_admin_token)
 
     from jobs.kpi_export import job_kpi_export
 
@@ -167,9 +163,8 @@ async def trigger_kpi_export(x_admin_token: str = Header(...)) -> JSONResponse:
 
 
 @router.post("/kpi-email")
-async def trigger_kpi_email(x_admin_token: str = Header(...)) -> JSONResponse:
+async def trigger_kpi_email(_: AuthDep) -> JSONResponse:
     """Dispara el envío del reporte KPI por correo de forma inmediata."""
-    _check_token(x_admin_token)
 
     from jobs.email_report import send_kpi_report
 
@@ -182,14 +177,13 @@ async def trigger_kpi_email(x_admin_token: str = Header(...)) -> JSONResponse:
 @router.post("/seguimiento-test")
 async def trigger_seguimiento_test(
     body: SeguimientoTestRequest,
-    x_admin_token: str = Header(...),
+    _: AuthDep,
 ) -> JSONResponse:
     """Envía un seguimiento manual a un teléfono específico para validar antes de habilitar el job.
 
     Busca el lead en la BD por teléfono y dispara _enviar_seguimiento con el stage actual.
     Si el lead no existe, retorna 404.
     """
-    _check_token(x_admin_token)
 
     from integrations.postgres import client as db
     from jobs.seguimientos import (
@@ -278,14 +272,13 @@ async def trigger_seguimiento_test(
 @router.post("/vicidial-test")
 async def trigger_vicidial_test(
     body: VicidialTestRequest,
-    x_admin_token: str = Header(...),
+    _: AuthDep,
 ) -> JSONResponse:
     """Envía un lead a Vicidial y mueve el deal a C90:3.
 
     simulate=true: omite la llamada real a Vicidial, simula éxito y ejecuta
     todo el flujo (mover deal a C90:3, actualizar leads y seguimientos_log).
     """
-    _check_token(x_admin_token)
 
     from integrations.postgres import client as db
     from integrations.vicidial.client import agregar_lead

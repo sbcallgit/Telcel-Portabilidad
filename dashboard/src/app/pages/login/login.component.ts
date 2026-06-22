@@ -1,7 +1,6 @@
 import { Component, inject } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
-import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { AuthService } from '../../services/auth.service';
 
 @Component({
@@ -12,32 +11,27 @@ import { AuthService } from '../../services/auth.service';
   styleUrl: './login.component.scss',
 })
 export class LoginComponent {
-  token = '';
+  email = '';
+  password = '';
   error = '';
   loading = false;
 
   private auth = inject(AuthService);
   private router = inject(Router);
-  private http = inject(HttpClient);
 
   login(): void {
-    if (!this.token.trim()) return;
+    if (!this.email.trim() || !this.password) return;
     this.loading = true;
     this.error = '';
 
-    this.http
-      .get('/api/admin/kpi-data?page=1&page_size=1', {
-        headers: new HttpHeaders({ 'X-Admin-Token': this.token.trim() }),
-      })
-      .subscribe({
-        next: () => {
-          this.auth.setToken(this.token.trim());
-          this.router.navigate(['/dashboard']);
-        },
-        error: () => {
-          this.error = 'Token incorrecto. Verifica e intenta de nuevo.';
-          this.loading = false;
-        },
-      });
+    this.auth.login(this.email.trim(), this.password).subscribe({
+      next: () => this.router.navigate(['/dashboard']),
+      error: (err) => {
+        this.error = err.status === 401
+          ? 'Correo o contraseña incorrectos.'
+          : 'Error de conexión. Intenta de nuevo.';
+        this.loading = false;
+      },
+    });
   }
 }

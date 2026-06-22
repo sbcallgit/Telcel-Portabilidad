@@ -5,16 +5,28 @@
       <span class="logo-text">Telcel Portabilidad</span>
     </div>
     <h1>Dashboard KPI</h1>
-    <p class="subtitle">Ingresa tu token de administrador para continuar.</p>
+    <p class="subtitle">Ingresa con tu correo y contraseña.</p>
 
     <form (ngSubmit)="login()">
       <div class="field">
-        <label for="token">Admin Token</label>
+        <label for="email">Correo electrónico</label>
         <input
-          id="token"
+          id="email"
+          type="email"
+          [(ngModel)]="email"
+          name="email"
+          placeholder="usuario@callcom.mx"
+          autocomplete="username"
+          [disabled]="loading"
+        />
+      </div>
+      <div class="field">
+        <label for="password">Contraseña</label>
+        <input
+          id="password"
           type="password"
-          [(ngModel)]="token"
-          name="token"
+          [(ngModel)]="password"
+          name="password"
           placeholder="••••••••••••"
           autocomplete="current-password"
           [disabled]="loading"
@@ -23,7 +35,7 @@
       @if (error) {
         <p class="error">{{ error }}</p>
       }
-      <button type="submit" [disabled]="loading || !token">
+      <button type="submit" [disabled]="loading || !email || !password">
         @if (loading) { Verificando... } @else { Ingresar }
       </button>
     </form>

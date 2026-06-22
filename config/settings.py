@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     vicidial_list_id: str = ""
     vicidial_campaign_id: str = ""
 
+    # Auth — JWT para dashboard
+    jwt_secret: str = "changeme-jwt-secret"
+    jwt_expire_hours: int = 8
+
     # Email — reporte diario KPI
     smtp_host: str = "smtp.hostinger.com"
     smtp_port: int = 465
