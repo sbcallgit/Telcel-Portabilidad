@@ -3,7 +3,7 @@ import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Chart, registerables } from 'chart.js';
-import { KpiService, KpiData, KpiResumen, StageCount, Conversacion } from '../../services/kpi.service';
+import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData } from '../../services/kpi.service';
 import { AuthService } from '../../services/auth.service';
 
 Chart.register(...registerables);
@@ -67,20 +67,47 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
 
   private stageChart?: Chart;
   private msgChart?: Chart;
+  private mgEstadoChart?: Chart;
+  private mgActorChart?: Chart;
   private chartsReady = false;
+
+  utmData: UtmData | null = null;
+  utmLoading = true;
+  utmError = '';
+  utmDesde = '';
+  utmHasta = '';
+
+  @ViewChild('utmFuenteChart') utmFuenteChartRef!: ElementRef<HTMLCanvasElement>;
+  private utmFuenteChart?: Chart;
+
+  megacableData: MegacableData | null = null;
+  megacableLoading = true;
+  megacableError = '';
+  mgDesde = '';
+  mgHasta = '';
+
+  @ViewChild('mgEstadoChart') mgEstadoChartRef!: ElementRef<HTMLCanvasElement>;
+  @ViewChild('mgActorChart') mgActorChartRef!: ElementRef<HTMLCanvasElement>;
 
   ngOnInit(): void {
     this.load();
+    this.loadUtm();
+    this.loadMegacable();
   }
 
   ngAfterViewInit(): void {
     this.chartsReady = true;
     if (this.resumen) this.renderCharts();
+    if (this.utmData) this.renderUtmChart();
+    if (this.megacableData) this.renderMegacableCharts();
   }
 
   ngOnDestroy(): void {
     this.stageChart?.destroy();
     this.msgChart?.destroy();
+    this.utmFuenteChart?.destroy();
+    this.mgEstadoChart?.destroy();
+    this.mgActorChart?.destroy();
   }
 
   load(page = 1): void {
@@ -117,8 +144,96 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
       });
   }
 
+  applyMgFilter(): void {
+    this.loadMegacable();
+  }
+
+  clearMgFilter(): void {
+    this.mgDesde = '';
+    this.mgHasta = '';
+    this.loadMegacable();
+  }
+
+  loadUtm(): void {
+    this.utmLoading = true;
+    this.utmError = '';
+    this.kpiSvc.getUtmData(this.utmDesde || undefined, this.utmHasta || undefined).subscribe({
+      next: (data) => {
+        this.utmData = data;
+        this.utmLoading = false;
+        if (this.chartsReady) setTimeout(() => this.renderUtmChart(), 0);
+      },
+      error: () => {
+        this.utmError = 'Error al cargar datos de atribución.';
+        this.utmLoading = false;
+      },
+    });
+  }
+
+  applyUtmFilter(): void { this.loadUtm(); }
+
+  clearUtmFilter(): void {
+    this.utmDesde = '';
+    this.utmHasta = '';
+    this.loadUtm();
+  }
+
+  private renderUtmChart(): void {
+    if (!this.utmData || !this.utmFuenteChartRef) return;
+    this.utmFuenteChart?.destroy();
+    const fuentes = this.utmData.por_fuente.slice(0, 8);
+    this.utmFuenteChart = new Chart(this.utmFuenteChartRef.nativeElement, {
+      type: 'bar',
+      data: {
+        labels: fuentes.map(f => f.fuente),
+        datasets: [
+          {
+            label: 'Leads',
+            data: fuentes.map(f => f.total),
+            backgroundColor: '#3b82f6',
+            borderRadius: 5,
+            borderSkipped: false,
+          },
+          {
+            label: 'Ventas',
+            data: fuentes.map(f => f.ventas),
+            backgroundColor: '#10b981',
+            borderRadius: 5,
+            borderSkipped: false,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'top', labels: { font: { family: 'Inter', size: 12 } } } },
+        scales: {
+          y: { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { font: { family: 'Inter' } } },
+          x: { grid: { display: false }, ticks: { font: { family: 'Inter' }, maxRotation: 30 } },
+        },
+      },
+    });
+  }
+
+  loadMegacable(): void {
+    this.megacableLoading = true;
+    this.megacableError = '';
+    this.kpiSvc.getMegacableData(this.mgDesde || undefined, this.mgHasta || undefined).subscribe({
+      next: (data) => {
+        this.megacableData = data;
+        this.megacableLoading = false;
+        if (this.chartsReady) setTimeout(() => this.renderMegacableCharts(), 0);
+      },
+      error: () => {
+        this.megacableError = 'Error al cargar datos de Megacable.';
+        this.megacableLoading = false;
+      },
+    });
+  }
+
   applyFilter(): void {
     this.load(1);
+    this.loadMegacable();
   }
 
   clearFilter(): void {
@@ -127,6 +242,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.stageFilter = '';
     this.search = '';
     this.load(1);
+    this.loadMegacable();
   }
 
   goPage(p: number): void {
@@ -180,6 +296,54 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
       range.push(i);
     }
     return range;
+  }
+
+  private renderMegacableCharts(): void {
+    if (!this.megacableData || !this.mgEstadoChartRef || !this.mgActorChartRef) return;
+    this.mgEstadoChart?.destroy();
+    this.mgActorChart?.destroy();
+
+    this.mgEstadoChart = new Chart(this.mgEstadoChartRef.nativeElement, {
+      type: 'doughnut',
+      data: {
+        labels: this.megacableData.por_estado.map(e => e.estado),
+        datasets: [{
+          data: this.megacableData.por_estado.map(e => e.cantidad),
+          backgroundColor: ['#10b981', '#f59e0b', '#3b82f6', '#e8001d'],
+          borderWidth: 2,
+          borderColor: '#fff',
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'right', labels: { font: { family: 'Inter', size: 12 }, padding: 12 } } },
+        cutout: '60%',
+      },
+    });
+
+    this.mgActorChart = new Chart(this.mgActorChartRef.nativeElement, {
+      type: 'bar',
+      data: {
+        labels: this.megacableData.por_actor.map(a => a.actor.charAt(0).toUpperCase() + a.actor.slice(1)),
+        datasets: [{
+          label: 'Mensajes',
+          data: this.megacableData.por_actor.map(a => a.cantidad),
+          backgroundColor: ['#3b82f6', '#8b5cf6', '#10b981'],
+          borderRadius: 6,
+          borderSkipped: false,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { font: { family: 'Inter' } } },
+          x: { grid: { display: false }, ticks: { font: { family: 'Inter' } } },
+        },
+      },
+    });
   }
 
   private renderCharts(): void {

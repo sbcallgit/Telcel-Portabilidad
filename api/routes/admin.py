@@ -317,3 +317,246 @@ async def trigger_vicidial_test(
         "vicidial_response": respuesta,
         "bitrix_movido_a": bitrix_movido_a,
     })
+
+
+@router.get("/utm-data")
+async def get_utm_data(
+    _: AuthDep,
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+) -> JSONResponse:
+    """Atribución UTM / Click-to-WhatsApp desde la tabla leads."""
+    from integrations.postgres import client as db
+    from datetime import datetime, timezone as tz
+
+    desde_ts = datetime(desde.year, desde.month, desde.day, 0, 0, 0, tzinfo=tz.utc) if desde \
+        else datetime(2000, 1, 1, tzinfo=tz.utc)
+    hasta_ts = datetime(hasta.year, hasta.month, hasta.day, 23, 59, 59, tzinfo=tz.utc) if hasta \
+        else datetime(2099, 12, 31, 23, 59, 59, tzinfo=tz.utc)
+
+    resumen = await db.fetchrow(
+        """
+        SELECT
+            COUNT(*)                                                       AS total_leads,
+            COUNT(*) FILTER (WHERE utm_source != '')                       AS con_utm,
+            COUNT(*) FILTER (WHERE ctwa_clid != '')                        AS con_ctwa,
+            COUNT(*) FILTER (WHERE bitrix_stage = 'C90:WON')              AS total_ventas,
+            COUNT(*) FILTER (WHERE bitrix_stage = 'C90:WON'
+                               AND utm_source != '')                       AS ventas_atribuidas
+        FROM leads
+        WHERE created_at >= $1 AND created_at <= $2
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    por_campana = await db.fetch(
+        """
+        SELECT
+            COALESCE(NULLIF(utm_campaign,''), '(sin campaña)') AS campana,
+            COALESCE(NULLIF(utm_source,''),   '(sin fuente)')  AS fuente,
+            COALESCE(NULLIF(utm_medium,''),   '(sin medio)')   AS medio,
+            COUNT(*)                                           AS total,
+            COUNT(*) FILTER (WHERE bitrix_stage = 'C90:WON')  AS ventas,
+            COUNT(*) FILTER (WHERE bitrix_stage IN ('C90:PROSPECTO','C90:WON')) AS prospectos
+        FROM leads
+        WHERE created_at >= $1 AND created_at <= $2
+          AND utm_source != ''
+        GROUP BY campana, fuente, medio
+        ORDER BY total DESC
+        LIMIT 20
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    por_anuncio = await db.fetch(
+        """
+        SELECT
+            ad_id,
+            COALESCE(NULLIF(utm_campaign,''), '(sin campaña)') AS campana,
+            COUNT(*)                                           AS total,
+            COUNT(*) FILTER (WHERE bitrix_stage = 'C90:WON')  AS ventas
+        FROM leads
+        WHERE created_at >= $1 AND created_at <= $2
+          AND ad_id != ''
+        GROUP BY ad_id, campana
+        ORDER BY total DESC
+        LIMIT 10
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    por_fuente = await db.fetch(
+        """
+        SELECT
+            COALESCE(NULLIF(utm_source,''), '(directo)') AS fuente,
+            COUNT(*)                                     AS total,
+            COUNT(*) FILTER (WHERE bitrix_stage = 'C90:WON') AS ventas
+        FROM leads
+        WHERE created_at >= $1 AND created_at <= $2
+        GROUP BY fuente
+        ORDER BY total DESC
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    def _pct(num, den):
+        return round(num / den * 100, 1) if den else 0.0
+
+    r = dict(resumen) if resumen else {}
+    total = int(r.get("total_leads") or 0)
+    con_utm = int(r.get("con_utm") or 0)
+    ventas = int(r.get("total_ventas") or 0)
+    ventas_atrib = int(r.get("ventas_atribuidas") or 0)
+
+    return JSONResponse({
+        "resumen": {
+            "total_leads":       total,
+            "con_utm":           con_utm,
+            "pct_con_utm":       _pct(con_utm, total),
+            "total_ventas":      ventas,
+            "ventas_atribuidas": ventas_atrib,
+            "pct_ventas_atrib":  _pct(ventas_atrib, ventas),
+        },
+        "por_campana": [
+            {
+                "campana":    row["campana"],
+                "fuente":     row["fuente"],
+                "medio":      row["medio"],
+                "total":      row["total"],
+                "ventas":     row["ventas"],
+                "prospectos": row["prospectos"],
+                "tasa":       _pct(row["ventas"], row["total"]),
+            }
+            for row in por_campana
+        ],
+        "por_anuncio": [
+            {
+                "ad_id":   row["ad_id"],
+                "campana": row["campana"],
+                "total":   row["total"],
+                "ventas":  row["ventas"],
+                "tasa":    _pct(row["ventas"], row["total"]),
+            }
+            for row in por_anuncio
+        ],
+        "por_fuente": [
+            {
+                "fuente": row["fuente"],
+                "total":  row["total"],
+                "ventas": row["ventas"],
+                "tasa":   _pct(row["ventas"], row["total"]),
+            }
+            for row in por_fuente
+        ],
+    })
+
+
+@router.get("/megacable-data")
+async def get_megacable_data(
+    _: AuthDep,
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+) -> JSONResponse:
+    """KPIs del agente Megacable desde su BD externa."""
+    from integrations.megacable_db import fetch_megacable
+    from datetime import datetime, timezone as tz
+
+    desde_ts = datetime(desde.year, desde.month, desde.day, 0, 0, 0, tzinfo=tz.utc) if desde \
+        else datetime(2000, 1, 1, tzinfo=tz.utc)
+    hasta_ts = datetime(hasta.year, hasta.month, hasta.day, 23, 59, 59, tzinfo=tz.utc) if hasta \
+        else datetime(2099, 12, 31, 23, 59, 59, tzinfo=tz.utc)
+
+    try:
+        resumen_rows = await fetch_megacable(
+            """
+            SELECT
+                COUNT(*)                                                        AS total,
+                COUNT(*) FILTER (WHERE estado = 'cerrada')                      AS cerradas,
+                COUNT(*) FILTER (WHERE estado = 'abierta')                      AS abiertas,
+                COUNT(*) FILTER (WHERE escalated_at IS NOT NULL)                AS escaladas,
+                COUNT(*) FILTER (WHERE agent_replied_at IS NOT NULL)            AS con_agente,
+                ROUND(AVG(
+                    EXTRACT(EPOCH FROM (agent_replied_at - created_at))
+                ) FILTER (WHERE agent_replied_at IS NOT NULL)::numeric, 1)      AS avg_primera_resp_segs,
+                ROUND(AVG(
+                    EXTRACT(EPOCH FROM (closed_at - created_at))
+                ) FILTER (WHERE closed_at IS NOT NULL)::numeric, 1)             AS avg_cierre_segs
+            FROM conversations
+            WHERE created_at >= $1 AND created_at <= $2
+            """,
+            desde_ts, hasta_ts,
+        )
+
+        por_estado = await fetch_megacable(
+            """
+            SELECT estado, COUNT(*) AS cantidad
+            FROM conversations
+            WHERE created_at >= $1 AND created_at <= $2
+            GROUP BY estado ORDER BY cantidad DESC
+            """,
+            desde_ts, hasta_ts,
+        )
+
+        por_actor = await fetch_megacable(
+            """
+            SELECT actor, COUNT(*) AS cantidad
+            FROM conversation_history ch
+            JOIN conversations c ON c.conversation_id = ch.conversation_id
+            WHERE c.created_at >= $1 AND c.created_at <= $2
+            GROUP BY actor
+            """,
+            desde_ts, hasta_ts,
+        )
+
+        intents = await fetch_megacable(
+            """
+            SELECT intent, COUNT(*) AS cantidad
+            FROM agent_runs
+            WHERE created_at >= $1 AND created_at <= $2
+              AND intent != ''
+            GROUP BY intent ORDER BY cantidad DESC LIMIT 8
+            """,
+            desde_ts, hasta_ts,
+        )
+
+        conversaciones = await fetch_megacable(
+            """
+            SELECT
+                c.conversation_id, c.phone, c.estado, c.empleado,
+                c.created_at, c.closed_at, c.escalated_at,
+                COUNT(*) FILTER (WHERE ch.actor = 'cliente') AS msgs_cliente,
+                COUNT(*) FILTER (WHERE ch.actor = 'bot')     AS msgs_bot,
+                COUNT(*) FILTER (WHERE ch.actor = 'humano')  AS msgs_humano
+            FROM conversations c
+            LEFT JOIN conversation_history ch ON ch.conversation_id = c.conversation_id
+            WHERE c.created_at >= $1 AND c.created_at <= $2
+            GROUP BY c.id, c.conversation_id, c.phone, c.estado, c.empleado,
+                     c.created_at, c.closed_at, c.escalated_at
+            ORDER BY c.created_at DESC
+            LIMIT 50
+            """,
+            desde_ts, hasta_ts,
+        )
+
+        def _fmt(row: dict) -> dict:
+            return {k: v.isoformat() if hasattr(v, "isoformat") else v for k, v in row.items()}
+
+        r = resumen_rows[0] if resumen_rows else {}
+        return JSONResponse({
+            "resumen": {
+                "total": int(r.get("total") or 0),
+                "cerradas": int(r.get("cerradas") or 0),
+                "abiertas": int(r.get("abiertas") or 0),
+                "escaladas": int(r.get("escaladas") or 0),
+                "con_agente": int(r.get("con_agente") or 0),
+                "avg_primera_resp_segs": float(r.get("avg_primera_resp_segs") or 0),
+                "avg_cierre_segs": float(r.get("avg_cierre_segs") or 0),
+            },
+            "por_estado": [{"estado": x["estado"], "cantidad": x["cantidad"]} for x in por_estado],
+            "por_actor": [{"actor": x["actor"], "cantidad": x["cantidad"]} for x in por_actor],
+            "intents": [{"intent": x["intent"], "cantidad": x["cantidad"]} for x in intents],
+            "conversaciones": [_fmt(c) for c in conversaciones],
+        })
+    except Exception as exc:
+        logger.error("megacable_data_error", extra={"error": str(exc)})
+        raise HTTPException(status_code=503, detail=f"Error conectando a BD Megacable: {exc}")
