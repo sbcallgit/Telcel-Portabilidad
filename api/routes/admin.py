@@ -319,6 +319,54 @@ async def trigger_vicidial_test(
     })
 
 
+@router.get("/meta-insights")
+async def get_meta_insights(
+    _: AuthDep,
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+    level: str = Query(default="campaign"),
+) -> JSONResponse:
+    """Ad Insights de Meta Marketing API — gasto, impresiones, clics, conversaciones WhatsApp."""
+    from integrations.meta.insights import get_insights
+    from config.settings import settings
+
+    if not settings.meta_access_token or not settings.meta_ad_account_id:
+        raise HTTPException(status_code=503, detail="Meta SDK no configurado")
+
+    try:
+        if desde and hasta:
+            rows = await get_insights(
+                date_preset=None,
+                since=str(desde),
+                until=str(hasta),
+                level=level,
+            )
+        else:
+            rows = await get_insights(date_preset="last_30d", level=level)
+
+        total_spend = round(sum(r["spend"] for r in rows), 2)
+        total_impressions = sum(r["impressions"] for r in rows)
+        total_clicks = sum(r["clicks"] for r in rows)
+        total_wa = sum(r["wa_conversaciones"] for r in rows)
+        cpl = round(total_spend / total_wa, 2) if total_wa else None
+
+        return JSONResponse({
+            "resumen": {
+                "total_spend":       total_spend,
+                "total_impressions": total_impressions,
+                "total_clicks":      total_clicks,
+                "total_wa_convs":    total_wa,
+                "cpl_wa":            cpl,
+                "avg_ctr":           round(total_clicks / total_impressions * 100, 2) if total_impressions else 0,
+            },
+            "rows": sorted(rows, key=lambda r: r["spend"], reverse=True),
+            "level": level,
+        })
+    except Exception as exc:
+        logger.error("meta_insights_error", extra={"error": str(exc)})
+        raise HTTPException(status_code=503, detail=f"Error Meta API: {exc}")
+
+
 @router.get("/utm-data")
 async def get_utm_data(
     _: AuthDep,

@@ -174,6 +174,115 @@
     }
 
     <!-- ═══════════════════════════════════════════════════════════
+         SECCIÓN META ADS — AD INSIGHTS
+    ════════════════════════════════════════════════════════════════ -->
+    <div class="section-divider">
+      <span>Meta Ads — Portabilidad 2 Callcom</span>
+    </div>
+
+    <div class="filters">
+      <div class="filter-group">
+        <label>Desde</label>
+        <input type="date" [(ngModel)]="metaDesde" />
+      </div>
+      <div class="filter-group">
+        <label>Hasta</label>
+        <input type="date" [(ngModel)]="metaHasta" />
+      </div>
+      <div class="filter-group">
+        <label>Nivel</label>
+        <select [(ngModel)]="metaLevel">
+          <option value="campaign">Campaña</option>
+          <option value="adset">Conjunto</option>
+          <option value="ad">Anuncio</option>
+        </select>
+      </div>
+      <button class="btn-primary" (click)="applyMetaFilter()">Filtrar</button>
+      <button class="btn-ghost" (click)="clearMetaFilter()">Limpiar</button>
+    </div>
+
+    @if (metaLoading) {
+      <div class="loading-state">Cargando datos de Meta Ads…</div>
+    } @else if (metaError) {
+      <div class="error-state">{{ metaError }}</div>
+    } @else if (metaData) {
+
+      <!-- KPI cards Meta -->
+      <div class="cards">
+        <div class="card card--warning">
+          <p class="card-label">Gasto total</p>
+          <p class="card-value">${{ metaData.resumen.total_spend | number:'1.2-2' }}</p>
+          <p class="card-sub">MXN</p>
+        </div>
+        <div class="card">
+          <p class="card-label">Impresiones</p>
+          <p class="card-value">{{ metaData.resumen.total_impressions | number }}</p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">Clics</p>
+          <p class="card-value">{{ metaData.resumen.total_clicks | number }}</p>
+          <p class="card-sub">CTR {{ metaData.resumen.avg_ctr }}%</p>
+        </div>
+        <div class="card card--success">
+          <p class="card-label">Convs. WhatsApp</p>
+          <p class="card-value">{{ metaData.resumen.total_wa_convs | number }}</p>
+          <p class="card-sub">
+            @if (metaData.resumen.cpl_wa) { CPL ${{ metaData.resumen.cpl_wa | number:'1.2-2' }} }
+          </p>
+        </div>
+      </div>
+
+      <!-- Gráfica gasto vs conversaciones -->
+      <div class="charts-row" style="margin-top:1.5rem">
+        <div class="chart-card" style="grid-column: 1 / -1">
+          <h3 class="chart-title">Gasto vs Conversaciones WhatsApp por {{ metaData.level === 'campaign' ? 'campaña' : metaData.level === 'adset' ? 'conjunto' : 'anuncio' }}</h3>
+          <div class="chart-wrap" style="height:280px"><canvas #metaSpendChart></canvas></div>
+        </div>
+      </div>
+
+      <!-- Tabla detalle -->
+      <div class="table-card" style="margin-top:1.5rem">
+        <div class="table-header">
+          <h3 class="table-title">Detalle por {{ metaData.level === 'campaign' ? 'campaña' : metaData.level === 'adset' ? 'conjunto de anuncios' : 'anuncio' }}</h3>
+          <span class="table-count">{{ metaData.rows.length }} filas</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Nombre</th>
+                <th style="text-align:right">Gasto</th>
+                <th style="text-align:right">Impresiones</th>
+                <th style="text-align:right">Clics</th>
+                <th style="text-align:right">CTR</th>
+                <th style="text-align:right">CPC</th>
+                <th style="text-align:right">CPM</th>
+                <th style="text-align:right">Convs WA</th>
+                <th style="text-align:right">CPL WA</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of metaData.rows; track row.campaign_id + row.ad_id) {
+                <tr>
+                  <td>{{ row.campaign_name }}</td>
+                  <td style="text-align:right">${{ row.spend | number:'1.2-2' }}</td>
+                  <td style="text-align:right">{{ row.impressions | number }}</td>
+                  <td style="text-align:right">{{ row.clicks | number }}</td>
+                  <td style="text-align:right">{{ row.ctr }}%</td>
+                  <td style="text-align:right">${{ row.cpc | number:'1.2-2' }}</td>
+                  <td style="text-align:right">${{ row.cpm | number:'1.2-2' }}</td>
+                  <td style="text-align:right">{{ row.wa_conversaciones }}</td>
+                  <td style="text-align:right">{{ row.cpa_wa ? ('$' + (row.cpa_wa | number:'1.2-2')) : '—' }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    }
+
+    <!-- ═══════════════════════════════════════════════════════════
          SECCIÓN ATRIBUCIÓN UTM
     ════════════════════════════════════════════════════════════════ -->
     <div class="section-divider">

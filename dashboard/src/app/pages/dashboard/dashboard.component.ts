@@ -3,7 +3,7 @@ import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Chart, registerables } from 'chart.js';
-import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData } from '../../services/kpi.service';
+import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow } from '../../services/kpi.service';
 import { AuthService } from '../../services/auth.service';
 
 Chart.register(...registerables);
@@ -71,6 +71,16 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   private mgActorChart?: Chart;
   private chartsReady = false;
 
+  metaData: MetaInsightsData | null = null;
+  metaLoading = true;
+  metaError = '';
+  metaDesde = '';
+  metaHasta = '';
+  metaLevel = 'campaign';
+
+  @ViewChild('metaSpendChart') metaSpendChartRef!: ElementRef<HTMLCanvasElement>;
+  private metaSpendChart?: Chart;
+
   utmData: UtmData | null = null;
   utmLoading = true;
   utmError = '';
@@ -91,6 +101,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
 
   ngOnInit(): void {
     this.load();
+    this.loadMeta();
     this.loadUtm();
     this.loadMegacable();
   }
@@ -98,6 +109,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   ngAfterViewInit(): void {
     this.chartsReady = true;
     if (this.resumen) this.renderCharts();
+    if (this.metaData) this.renderMetaChart();
     if (this.utmData) this.renderUtmChart();
     if (this.megacableData) this.renderMegacableCharts();
   }
@@ -105,6 +117,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.stageChart?.destroy();
     this.msgChart?.destroy();
+    this.metaSpendChart?.destroy();
     this.utmFuenteChart?.destroy();
     this.mgEstadoChart?.destroy();
     this.mgActorChart?.destroy();
@@ -152,6 +165,88 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.mgDesde = '';
     this.mgHasta = '';
     this.loadMegacable();
+  }
+
+  loadMeta(): void {
+    this.metaLoading = true;
+    this.metaError = '';
+    this.kpiSvc.getMetaInsights(
+      this.metaDesde || undefined,
+      this.metaHasta || undefined,
+      this.metaLevel,
+    ).subscribe({
+      next: (data) => {
+        this.metaData = data;
+        this.metaLoading = false;
+        if (this.chartsReady) setTimeout(() => this.renderMetaChart(), 0);
+      },
+      error: () => {
+        this.metaError = 'Error al cargar datos de Meta Ads.';
+        this.metaLoading = false;
+      },
+    });
+  }
+
+  applyMetaFilter(): void { this.loadMeta(); }
+
+  clearMetaFilter(): void {
+    this.metaDesde = '';
+    this.metaHasta = '';
+    this.metaLevel = 'campaign';
+    this.loadMeta();
+  }
+
+  private renderMetaChart(): void {
+    if (!this.metaData || !this.metaSpendChartRef) return;
+    this.metaSpendChart?.destroy();
+    const rows = this.metaData.rows.slice(0, 8);
+    const labels = rows.map(r => r.campaign_name.length > 28 ? r.campaign_name.slice(0, 28) + '…' : r.campaign_name);
+    this.metaSpendChart = new Chart(this.metaSpendChartRef.nativeElement, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          {
+            label: 'Gasto (MXN)',
+            data: rows.map(r => r.spend),
+            backgroundColor: '#e8001d',
+            borderRadius: 5,
+            borderSkipped: false,
+            yAxisID: 'ySpend',
+          },
+          {
+            label: 'Convs. WhatsApp',
+            data: rows.map(r => r.wa_conversaciones),
+            backgroundColor: '#10b981',
+            borderRadius: 5,
+            borderSkipped: false,
+            yAxisID: 'yConvs',
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: 'top', labels: { font: { family: 'Inter', size: 12 } } } },
+        scales: {
+          ySpend: {
+            type: 'linear',
+            position: 'left',
+            beginAtZero: true,
+            grid: { color: '#f1f5f9' },
+            ticks: { font: { family: 'Inter' }, callback: (v) => `$${v}` },
+          },
+          yConvs: {
+            type: 'linear',
+            position: 'right',
+            beginAtZero: true,
+            grid: { display: false },
+            ticks: { font: { family: 'Inter' } },
+          },
+          x: { grid: { display: false }, ticks: { font: { family: 'Inter', size: 11 }, maxRotation: 30 } },
+        },
+      },
+    });
   }
 
   loadUtm(): void {

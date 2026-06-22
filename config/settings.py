@@ -64,6 +64,20 @@ class Settings(BaseSettings):
     vicidial_list_id: str = ""
     vicidial_campaign_id: str = ""
 
+    # Meta / Facebook Business SDK (Ad Insights + Conversions API)
+    meta_app_id: str = ""
+    meta_app_secret: str = ""
+    meta_access_token: str = ""
+    meta_ad_account_id: str = ""   # formato: act_XXXXXXXXXX
+    meta_pixel_id: str = ""        # para Conversions API (Caso B)
+
+    # Megacable DB (agente externo — BD independiente)
+    megacable_db_host: str = "147.79.78.75"
+    megacable_db_port: int = 5433
+    megacable_db_name: str = "bot_megacable"
+    megacable_db_user: str = "postgres"
+    megacable_db_password: str = ""
+
     # Auth — JWT para dashboard
     jwt_secret: str = "changeme-jwt-secret"
     jwt_expire_hours: int = 8

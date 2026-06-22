@@ -71,6 +71,36 @@ export interface MegacableConversacion {
   msgs_humano: number;
 }
 
+export interface MetaInsightRow {
+  campaign_id: string;
+  campaign_name: string;
+  adset_name: string;
+  ad_id: string;
+  ad_name: string;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  spend: number;
+  cpc: number;
+  cpm: number;
+  ctr: number;
+  wa_conversaciones: number;
+  cpa_wa: number | null;
+}
+
+export interface MetaInsightsData {
+  resumen: {
+    total_spend: number;
+    total_impressions: number;
+    total_clicks: number;
+    total_wa_convs: number;
+    cpl_wa: number | null;
+    avg_ctr: number;
+  };
+  rows: MetaInsightRow[];
+  level: string;
+}
+
 export interface UtmResumen {
   total_leads: number;
   con_utm: number;
@@ -142,6 +172,13 @@ export class KpiService {
       headers: this.headers,
       params,
     });
+  }
+
+  getMetaInsights(desde?: string, hasta?: string, level = 'campaign'): Observable<MetaInsightsData> {
+    let params = new HttpParams().set('level', level);
+    if (desde) params = params.set('desde', desde);
+    if (hasta) params = params.set('hasta', hasta);
+    return this.http.get<MetaInsightsData>('/api/admin/meta-insights', { headers: this.headers, params });
   }
 
   getUtmData(desde?: string, hasta?: string): Observable<UtmData> {
