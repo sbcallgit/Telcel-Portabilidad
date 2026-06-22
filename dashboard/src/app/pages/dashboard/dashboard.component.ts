@@ -101,7 +101,9 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
           this.conversaciones = data.conversaciones;
           this.paginacion = data.paginacion;
           this.loading = false;
-          if (this.chartsReady) this.renderCharts();
+          // setTimeout(0) espera a que Angular renderice el bloque @else
+          // antes de intentar acceder a los canvas via @ViewChild
+          if (this.chartsReady) setTimeout(() => this.renderCharts(), 0);
         },
         error: (err: { status?: number }) => {
           if (err.status === 403) {
