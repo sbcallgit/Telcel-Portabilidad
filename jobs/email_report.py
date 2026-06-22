@@ -27,10 +27,16 @@ TZ = pytz.timezone("America/Monterrey")
 
 
 def _mes_actual_range() -> tuple[datetime, datetime]:
-    """Retorna (inicio_del_mes, ahora) en UTC para filtrar el mes corriente."""
+    """Retorna (inicio_del_mes, fin_de_ayer) en UTC.
+
+    El reporte corre a las 00:01 del día N — captura el cierre del día N-1.
+    Ejemplo: 00:01 del 23 → rango 1 jun 00:00 ... 22 jun 23:59:59.
+    """
+    from datetime import timedelta
     ahora = datetime.now(tz=TZ)
-    inicio = ahora.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    return inicio.astimezone(timezone.utc), ahora.astimezone(timezone.utc)
+    ayer = (ahora - timedelta(days=1)).replace(hour=23, minute=59, second=59, microsecond=999999)
+    inicio = ayer.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return inicio.astimezone(timezone.utc), ayer.astimezone(timezone.utc)
 
 
 async def _get_daily_stats() -> dict:
@@ -191,11 +197,13 @@ async def send_kpi_report() -> None:
         return
 
     try:
+        from datetime import timedelta
         ahora = datetime.now(tz=TZ)
-        fecha = ahora.strftime("%d/%m/%Y")
-        fecha_archivo = ahora.strftime("%Y%m%d")
-        inicio_mes_str = ahora.replace(day=1).strftime("%d/%m/%Y")
-        subject = f"Reporte KPI Vera Portabilidad — {inicio_mes_str} al {fecha}"
+        ayer = ahora - timedelta(days=1)
+        fecha = ayer.strftime("%d/%m/%Y")           # cierre del día anterior
+        fecha_archivo = ayer.strftime("%Y%m%d")
+        inicio_mes_str = ayer.replace(day=1).strftime("%d/%m/%Y")
+        subject = f"Reporte KPI Vera Portabilidad — Cierre {inicio_mes_str} al {fecha}"
 
         stats, csv_bytes = await asyncio.gather(
             _get_daily_stats(),

@@ -600,12 +600,12 @@ def create_scheduler() -> AsyncIOScheduler:
         coalesce=True,
         misfire_grace_time=3600,
     )
-    # Reporte diario por correo a medianoche — incluye datos del 1° al día actual del mes
+    # Reporte diario por correo a las 00:01 — cierre del día anterior (1° al día-1 del mes)
     scheduler.add_job(
         send_kpi_report,
         trigger="cron",
         hour=0,
-        minute=0,
+        minute=1,
         timezone=TZ,
         id="kpi_email_report",
         max_instances=1,
