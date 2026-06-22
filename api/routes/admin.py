@@ -319,6 +319,35 @@ async def trigger_vicidial_test(
     })
 
 
+class CapiTestBody(BaseModel):
+    telefono: str
+    deal_id: str = "test_001"
+    evento: str = "Purchase"   # Purchase | Lead
+    recarga: float = 0.0
+    simulate: bool = False
+
+
+@router.post("/capi-test")
+async def capi_test(_: AuthDep, body: CapiTestBody) -> JSONResponse:
+    """Dispara manualmente un evento CAPI a Meta para validación."""
+    from integrations.meta.conversions import send_purchase_event, send_lead_event
+    from config.settings import settings
+
+    if not settings.meta_pixel_id or not settings.meta_access_token:
+        raise HTTPException(status_code=503, detail="Meta CAPI no configurado (falta META_PIXEL_ID o META_ACCESS_TOKEN)")
+
+    if body.simulate:
+        return JSONResponse({"status": "simulated", "pixel_id": settings.meta_pixel_id, "evento": body.evento})
+
+    if body.evento == "Purchase":
+        ok = await send_purchase_event(body.telefono, body.deal_id, recarga=body.recarga)
+    else:
+        from integrations.meta.conversions import send_lead_event
+        ok = await send_lead_event(body.telefono, body.deal_id)
+
+    return JSONResponse({"status": "ok" if ok else "error", "pixel_id": settings.meta_pixel_id, "evento": body.evento})
+
+
 @router.get("/meta-insights")
 async def get_meta_insights(
     _: AuthDep,

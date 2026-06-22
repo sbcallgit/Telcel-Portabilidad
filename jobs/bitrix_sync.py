@@ -30,6 +30,40 @@ async def _sync_deal(bx, lead_id: int, deal_id: str, semaphore: asyncio.Semaphor
             return lead_id, ""
 
 
+async def _fire_capi_if_needed(lead_id: int, stage_nuevo: str, stage_anterior: str) -> None:
+    """Dispara evento CAPI a Meta cuando el stage cambia a WON o PROSPECTO por primera vez."""
+    if stage_nuevo == stage_anterior:
+        return
+    if stage_nuevo not in ("C90:WON", "C90:PROSPECTO"):
+        return
+
+    try:
+        row = await db.fetchrow(
+            "SELECT telefono, bitrix_lead_id, recarga_habitual, ctwa_clid FROM leads WHERE id = $1",
+            lead_id,
+        )
+        if not row:
+            return
+
+        from integrations.meta.conversions import send_purchase_event, send_lead_event
+
+        if stage_nuevo == "C90:WON":
+            await send_purchase_event(
+                phone=row["telefono"],
+                deal_id=row["bitrix_lead_id"],
+                recarga=float(row["recarga_habitual"] or 0),
+                ctwa_clid=row["ctwa_clid"] or "",
+            )
+        elif stage_nuevo == "C90:PROSPECTO":
+            await send_lead_event(
+                phone=row["telefono"],
+                deal_id=row["bitrix_lead_id"],
+                ctwa_clid=row["ctwa_clid"] or "",
+            )
+    except Exception as exc:
+        logger.warning("capi_dispatch_error", extra={"lead_id": lead_id, "error": str(exc)})
+
+
 async def job_bitrix_sync() -> None:
     """Actualiza leads.bitrix_stage con el stage real de Bitrix para todos los leads activos."""
     inicio = datetime.now(tz=TZ)
@@ -38,7 +72,7 @@ async def job_bitrix_sync() -> None:
     try:
         rows = await db.fetch(
             """
-            SELECT id, bitrix_lead_id
+            SELECT id, bitrix_lead_id, bitrix_stage
             FROM leads
             WHERE bitrix_lead_id != ''
             ORDER BY updated_at DESC
@@ -60,8 +94,12 @@ async def job_bitrix_sync() -> None:
     tareas = [_sync_deal(bx, row["id"], row["bitrix_lead_id"], semaphore) for row in rows]
     resultados = await asyncio.gather(*tareas)
 
+    # Mapa de stage anterior para detectar transiciones a WON/PROSPECTO
+    stage_anterior_map = {row["id"]: row.get("bitrix_stage", "") for row in rows}
+
     actualizados = 0
     errores = 0
+    capi_tasks = []
     for lead_id, stage in resultados:
         if not stage:
             errores += 1
@@ -72,9 +110,16 @@ async def job_bitrix_sync() -> None:
                 stage, lead_id,
             )
             actualizados += 1
+            # Disparar CAPI en background si el stage cambió a WON o PROSPECTO
+            stage_prev = stage_anterior_map.get(lead_id, "")
+            if stage != stage_prev and stage in ("C90:WON", "C90:PROSPECTO"):
+                capi_tasks.append(_fire_capi_if_needed(lead_id, stage, stage_prev))
         except Exception as exc:
             errores += 1
             logger.warning("bitrix_sync_update_error", extra={"lead_id": lead_id, "error": str(exc)})
+
+    if capi_tasks:
+        await asyncio.gather(*capi_tasks, return_exceptions=True)
 
     duracion_s = round((datetime.now(tz=TZ) - inicio).total_seconds(), 1)
     logger.info(
