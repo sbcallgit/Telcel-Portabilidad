@@ -22,3 +22,4 @@ class PortabilidadState(TypedDict, total=False):
     motivo_escalacion: str
     bitrix_lead_id: str
     bitrix_etapa: str
+    referral: dict  # datos de atribución Click-to-WhatsApp (source_id, ctwa_clid, source_url, etc.)

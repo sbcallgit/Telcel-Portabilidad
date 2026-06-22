@@ -125,26 +125,83 @@ def _format_cacs(cacs: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+def _parse_utms(source_url: str) -> dict:
+    """Extrae parámetros UTM de la URL del anuncio."""
+    from urllib.parse import urlparse, parse_qs
+    try:
+        qs = parse_qs(urlparse(source_url).query)
+        return {
+            "utm_source":   qs.get("utm_source",   [""])[0],
+            "utm_medium":   qs.get("utm_medium",   [""])[0],
+            "utm_campaign": qs.get("utm_campaign", [""])[0],
+            "utm_content":  qs.get("utm_content",  [""])[0],
+            "utm_term":     qs.get("utm_term",     [""])[0],
+        }
+    except Exception:
+        return {}
+
+
+async def _get_referral(phone: str) -> dict:
+    """Lee el referral Click-to-WhatsApp guardado por el webhook (TTL 24h)."""
+    try:
+        import json as _json
+        from integrations.redis_client import get_redis
+        redis = await get_redis()
+        raw = await redis.get(f"wa_referral:{phone}")
+        return _json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
 async def _upsert_lead_primer_contacto(sender_phone: str, deal_id: str) -> None:
     """Crea el registro en leads al primer mensaje usando el teléfono del remitente.
 
     Garantiza que cualquier usuario que contacte al bot queda registrado para seguimientos,
     sin importar si llega a dar su número a portar.
     """
+    referral = await _get_referral(sender_phone)
+    utms = _parse_utms(referral.get("source_url", "")) if referral else {}
+
     try:
         await db.execute(
             """
-            INSERT INTO leads (telefono, bitrix_lead_id, etapa)
-            VALUES ($1, $2, 'validacion')
+            INSERT INTO leads (
+                telefono, bitrix_lead_id, etapa,
+                utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+                ctwa_clid, ad_id, referral_source_url
+            )
+            VALUES ($1, $2, 'validacion', $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (telefono) DO UPDATE SET
                 bitrix_lead_id = CASE
                     WHEN leads.bitrix_lead_id = '' THEN EXCLUDED.bitrix_lead_id
                     ELSE leads.bitrix_lead_id
                 END,
+                utm_source   = CASE WHEN leads.utm_source   = '' THEN EXCLUDED.utm_source   ELSE leads.utm_source   END,
+                utm_medium   = CASE WHEN leads.utm_medium   = '' THEN EXCLUDED.utm_medium   ELSE leads.utm_medium   END,
+                utm_campaign = CASE WHEN leads.utm_campaign = '' THEN EXCLUDED.utm_campaign ELSE leads.utm_campaign END,
+                utm_content  = CASE WHEN leads.utm_content  = '' THEN EXCLUDED.utm_content  ELSE leads.utm_content  END,
+                utm_term     = CASE WHEN leads.utm_term     = '' THEN EXCLUDED.utm_term     ELSE leads.utm_term     END,
+                ctwa_clid    = CASE WHEN leads.ctwa_clid    = '' THEN EXCLUDED.ctwa_clid    ELSE leads.ctwa_clid    END,
+                ad_id        = CASE WHEN leads.ad_id        = '' THEN EXCLUDED.ad_id        ELSE leads.ad_id        END,
+                referral_source_url = CASE WHEN leads.referral_source_url = '' THEN EXCLUDED.referral_source_url ELSE leads.referral_source_url END,
                 updated_at = NOW()
             """,
             sender_phone, deal_id,
+            utms.get("utm_source", ""),
+            utms.get("utm_medium", ""),
+            utms.get("utm_campaign", ""),
+            utms.get("utm_content", ""),
+            utms.get("utm_term", ""),
+            referral.get("ctwa_clid", ""),
+            referral.get("source_id", ""),
+            referral.get("source_url", ""),
         )
+        if referral:
+            logger.info("lead_referral_capturado", extra={
+                "phone_tail": sender_phone[-4:],
+                "ad_id": referral.get("source_id", ""),
+                "ctwa_clid": referral.get("ctwa_clid", "")[:12] + "…" if referral.get("ctwa_clid") else "",
+            })
     except Exception as exc:
         logger.warning("upsert_lead_primer_contacto_error", extra={"phone_tail": sender_phone[-4:], "error": str(exc)})
 

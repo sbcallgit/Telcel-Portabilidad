@@ -14,10 +14,12 @@ def verify_webhook_signature(payload: bytes, signature: str, secret: str) -> boo
     return hmac.compare_digest(expected, signature)
 
 
-def parse_whatsapp_message(payload: dict) -> tuple[str, str, str] | None:
-    """Extrae (phone, text, message_id) del payload de Meta.
+def parse_whatsapp_message(payload: dict) -> tuple[str, str, str, dict] | None:
+    """Extrae (phone, text, message_id, referral) del payload de Meta.
 
     Retorna None para status updates, mensajes no-texto, o payloads malformados.
+    El campo referral incluye source_id, source_type, ctwa_clid y source_url cuando
+    el mensaje proviene de un anuncio Click-to-WhatsApp.
     """
     try:
         entry = payload.get("entry", [])
@@ -47,6 +49,8 @@ def parse_whatsapp_message(payload: dict) -> tuple[str, str, str] | None:
         if not phone or not text or not message_id:
             return None
 
-        return phone, text, message_id
+        referral = msg.get("referral", {})
+
+        return phone, text, message_id, referral
     except (IndexError, KeyError, TypeError):
         return None

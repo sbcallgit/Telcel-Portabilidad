@@ -106,7 +106,7 @@ async def receive_message(request: Request) -> dict:
     if parsed is None:
         return {"status": "ignored"}
 
-    phone, text, message_id = parsed
+    phone, text, message_id, referral = parsed
 
     # Deduplicación: WhatsApp puede entregar el mismo mensaje dos veces
     redis = await get_redis()
@@ -134,6 +134,12 @@ async def receive_message(request: Request) -> dict:
         return {"status": "bot_pausado"}
 
     # Encolar con debounce — retorna inmediatamente; el agente corre en background
+    # Guardar referral en Redis para que validacion_node lo persista en el primer turno
+    if referral:
+        redis = await get_redis()
+        import json as _json
+        await redis.set(f"wa_referral:{phone}", _json.dumps(referral), ex=86400)
+
     await debounce.enqueue(phone, text, settings.debounce_window_ms, _process_message)
 
     return {"status": "ok"}

@@ -153,6 +153,17 @@ ALTER TABLE leads
 
 CREATE UNIQUE INDEX IF NOT EXISTS leads_telefono_uq ON leads(telefono);
 
+-- Atribución UTM / Click-to-WhatsApp
+ALTER TABLE leads
+  ADD COLUMN IF NOT EXISTS utm_source   TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS utm_medium   TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS utm_campaign TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS utm_content  TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS utm_term     TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS ctwa_clid    TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS ad_id        TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS referral_source_url TEXT NOT NULL DEFAULT '';
+
 -- Usuarios del dashboard KPI
 CREATE TABLE IF NOT EXISTS dashboard_users (
     id SERIAL PRIMARY KEY,
