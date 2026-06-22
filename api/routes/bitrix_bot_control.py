@@ -117,6 +117,22 @@ async def _handle_toggle(request: Request, pause: bool) -> dict:
         )
         raise HTTPException(status_code=404, detail=f"No se encontró teléfono para deal_id={deal_id}")
 
+    # No pausar si el deal ya está cerrado — evita que una regla de automatización
+    # sobre un deal LOSE/WON bloquee conversaciones nuevas del mismo número.
+    if pause:
+        try:
+            bitrix = BitrixClient()
+            deal = await bitrix.get_deal(deal_id)
+            stage = deal.get("STAGE_ID", "")
+            if stage in ("C90:WON", "C90:LOSE"):
+                logger.info(
+                    "bitrix_bot_pause_ignorado_deal_cerrado",
+                    extra={"deal_id": deal_id, "stage": stage, "phone_tail": phone[-4:]},
+                )
+                return {"status": "ignorado", "reason": "deal_cerrado", "stage": stage}
+        except Exception as exc:
+            logger.warning("bitrix_bot_pause_stage_check_error", extra={"deal_id": deal_id, "error": str(exc)})
+
     redis = await get_redis()
     action = "pausado" if pause else "activado"
 
