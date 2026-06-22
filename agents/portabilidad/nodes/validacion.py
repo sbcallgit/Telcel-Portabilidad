@@ -604,14 +604,20 @@ async def validacion_node(state: PortabilidadState) -> dict:
     if not messages:
         return {}
 
-    # Si el bot estaba pausado (deal anterior en WON/LOSE/escalado), reactivarlo
-    # para que el nuevo deal que abre WhatsApp quede activo desde el primer mensaje.
+    # Reactivar bot solo si el deal está cerrado (WON/LOSE) — indica conversación nueva.
+    # Si el deal está en escalamiento humano activo (UC_8WB2DT), mantener el bot pausado.
     phone = state.get("customer_phone") or state.get("session_id") or ""
     if phone:
         try:
             from integrations.redis_client import get_redis
+            from integrations.postgres import client as db
             redis = await get_redis()
-            await redis.delete(f"bot_pausado:{phone}")
+            row = await db.fetchrow(
+                "SELECT bitrix_stage FROM leads WHERE telefono = $1", phone
+            )
+            stage = row["bitrix_stage"] if row else ""
+            if stage in ("C90:WON", "C90:LOSE"):
+                await redis.delete(f"bot_pausado:{phone}")
         except Exception:
             pass
 
