@@ -87,7 +87,7 @@ bot_telcel_portabilidad/
 │       ├── health.py        # GET /health — status ok/degraded + check de DB
 │       ├── webhooks.py      # POST/GET /webhooks/telcel — entry point de WhatsApp
 │       ├── telegram.py      # POST /webhooks/telegram — entry point de Telegram (pruebas)
-│       └── admin.py         # POST /admin/kpi-export; POST /admin/seguimiento-test; POST /admin/vicidial-test (X-Admin-Token)
+│       └── admin.py         # POST /admin/kpi-export; POST /admin/kpi-email; POST /admin/seguimiento-test; POST /admin/vicidial-test (X-Admin-Token)
 │
 ├── db/                      # Capa de datos
 │   ├── models.py            # Modelos Pydantic: Lead, Lada, Promo, CAC, Objecion
@@ -96,6 +96,8 @@ bot_telcel_portabilidad/
 ├── jobs/                    # Tareas programadas
 │   ├── seguimientos.py      # Rescate 1, 2 y 3 — seguimientos automáticos (APScheduler, desactivado pending validación)
 │   ├── bitrix_sync.py       # Sincroniza leads.bitrix_stage desde Bitrix cada 30 min (APScheduler, activo)
+│   ├── kpi_export.py        # Extracción nocturna de KPIs a las 3am — upsert en kpi_conversaciones
+│   ├── email_report.py      # Reporte diario KPI por correo (SMTP SSL Hostinger) — se dispara a las 00:00
 │   └── connector_poll.py    # Polling cada 30s: reenvía mensajes del asesor al usuario
 │
 ├── knowledge/               # Base de conocimiento del bot
@@ -170,6 +172,11 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `VICIDIAL_PASS` | Contraseña API Vicidial |
 | `VICIDIAL_LIST_ID` | ID de lista en Vicidial (default: `101`) |
 | `VICIDIAL_CAMPAIGN_ID` | ID de campaña en Vicidial (default: `n8n_port`) |
+| `SMTP_HOST` | Servidor SMTP para reporte KPI (default: `smtp.hostinger.com`) |
+| `SMTP_PORT` | Puerto SMTP SSL (default: `465`) |
+| `SMTP_USER` | Correo remitente (ej. `crm1@callcomcc.cloud`) |
+| `SMTP_PASS` | Contraseña del correo remitente |
+| `REPORT_EMAIL_TO` | Destinatarios del reporte KPI separados por coma (ej. `a@x.com,b@x.com`) |
 
 ---
 
@@ -445,6 +452,8 @@ Solo se envía a leads con `bitrix_stage = 'C90:2'` (Rescate 2 ya enviado).
 |---|---|---|---|
 | `job_bitrix_sync` | `jobs/bitrix_sync.py` | Cada 30 min | **Activo** |
 | `job_seguimientos` | `jobs/seguimientos.py` | Cada 5 min, L-S 9am–9pm | **Activo** (modo test — solo `SEGUIMIENTOS_TEST_PHONE`) |
+| `job_kpi_export` | `jobs/kpi_export.py` | Diario 3am Monterrey | **Activo** |
+| `send_kpi_report` | `jobs/email_report.py` | Diario 00:00 Monterrey | **Activo** |
 
 ### Trigger manual para validación
 
@@ -506,22 +515,35 @@ Tabla aislada del agente (no la usan los nodos). Una fila por conversación. Se 
 
 - Corre a las **3am America/Monterrey** via APScheduler (`id="kpi_export"`)
 - Fuente: tabla `checkpoints` (últimos 30 días, máx 500 threads), no la tabla `leads`
+- **Optimización delta:** solo procesa conversaciones nuevas (no están en `kpi_conversaciones`) o con actividad en las últimas 24h. Evita re-procesar el histórico completo en cada ejecución.
+- **Resumen LLM reutilizado:** si la conversación ya tiene `resumen` en la tabla, se reutiliza sin llamar al LLM — solo conversaciones nuevas pagan el costo de ~2-3s del LLM.
 - Procesa en lotes de 50 con 0.3s de pausa entre lotes para no saturar el event loop
 - Upsert por `id_conversacion` → seguro re-ejecutar
-- El resumen LLM agrega ~2-3s por conversación; para 500 conversaciones son ~25 min — dentro de la ventana nocturna
 - `_ensure_graph_initialized()`: en el proceso FastAPI el grafo ya está listo; en standalone inicializa un pool psycopg con timeout de 8s
 - **`solicitud_enviada_al_agente_el`:** pendiente v2 (no hay timestamp de escalación en el estado actual)
 
-### Trigger manual
+### Reporte diario por correo (`jobs/email_report.py`)
 
-Para regenerar la tabla sin esperar las 3am (corre dentro del proceso FastAPI con el checkpointer PG y OAuth de Bitrix activos):
+- Corre a las **00:00 America/Monterrey** via APScheduler (`id="kpi_email_report"`) — job independiente del kpi_export
+- **Contenido:** correo HTML con KPIs acumulados del mes + CSV adjunto con el detalle
+- **Rango de datos:** del día 1 del mes en curso hasta el día actual (acumulado mensual). Ejemplo: el reporte del 5 de junio incluye conversaciones del 1 al 5 de junio.
+- **Transporte:** SMTP SSL puerto 465 vía `smtplib` estándar en executor (sin dependencias adicionales)
+- **Destinatarios:** configurados en `REPORT_EMAIL_TO` como lista separada por comas
+- **KPIs en el HTML:** total de conversaciones, ventas WON, tiempo de primera respuesta promedio, tasa de automatización del bot, conversaciones con asesor humano, tiempo de cierre promedio, mensajes promedio por cliente
+
+### Triggers manuales
 
 ```bash
+# Regenerar tabla kpi_conversaciones
 curl -X POST https://portabilidad.callcomcc.io/admin/kpi-export \
+  -H "X-Admin-Token: <ADMIN_TOKEN>"
+
+# Enviar reporte por correo de forma inmediata
+curl -X POST https://portabilidad.callcomcc.io/admin/kpi-email \
   -H "X-Admin-Token: <ADMIN_TOKEN>"
 ```
 
-El endpoint retorna `{"status": "started"}` inmediatamente y el job corre en background. Progreso en logs (`job_kpi_export_done` con `total`, `procesados`, `errores`, `duracion_s`).
+Ambos endpoints retornan `{"status": "started"}` inmediatamente y corren en background. Progreso en logs (`job_kpi_export_done`, `kpi_email_sent`).
 
 ### Export a CSV
 

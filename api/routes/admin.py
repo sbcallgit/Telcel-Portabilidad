@@ -166,6 +166,19 @@ async def trigger_kpi_export(x_admin_token: str = Header(...)) -> JSONResponse:
     return JSONResponse({"status": "started", "message": "KPI export corriendo en background — revisa logs para progreso"})
 
 
+@router.post("/kpi-email")
+async def trigger_kpi_email(x_admin_token: str = Header(...)) -> JSONResponse:
+    """Dispara el envío del reporte KPI por correo de forma inmediata."""
+    _check_token(x_admin_token)
+
+    from jobs.email_report import send_kpi_report
+
+    logger.info("admin_kpi_email_triggered")
+    asyncio.create_task(send_kpi_report())
+
+    return JSONResponse({"status": "started", "message": "Reporte KPI enviando en background — revisa logs"})
+
+
 @router.post("/seguimiento-test")
 async def trigger_seguimiento_test(
     body: SeguimientoTestRequest,
