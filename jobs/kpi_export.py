@@ -434,6 +434,9 @@ async def job_kpi_export() -> None:
         extra={"total": len(threads), "procesados": procesados, "errores": errores, "duracion_s": duracion},
     )
 
+    from jobs.email_report import send_kpi_report
+    await send_kpi_report()
+
 
 async def export_to_csv(filepath: str | None = None) -> str:
     """Vuelca kpi_conversaciones a CSV. Retorna la ruta del archivo generado."""

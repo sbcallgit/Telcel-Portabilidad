@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     vicidial_list_id: str = ""
     vicidial_campaign_id: str = ""
 
+    # Email — reporte diario KPI
+    smtp_host: str = "smtp.hostinger.com"
+    smtp_port: int = 465
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    report_email_to: str = ""
+
     # App
     app_version: str = "1.0.0"
     environment: str = "development"
