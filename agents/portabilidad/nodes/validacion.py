@@ -604,6 +604,17 @@ async def validacion_node(state: PortabilidadState) -> dict:
     if not messages:
         return {}
 
+    # Si el bot estaba pausado (deal anterior en WON/LOSE/escalado), reactivarlo
+    # para que el nuevo deal que abre WhatsApp quede activo desde el primer mensaje.
+    phone = state.get("customer_phone") or state.get("session_id") or ""
+    if phone:
+        try:
+            from integrations.redis_client import get_redis
+            redis = await get_redis()
+            await redis.delete(f"bot_pausado:{phone}")
+        except Exception:
+            pass
+
     # Crear deal en Bitrix al primer contacto (no bloquea si falla)
     deal_update = await _crear_deal_primer_contacto(state)
 
