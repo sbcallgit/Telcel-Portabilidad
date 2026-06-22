@@ -164,6 +164,22 @@ ALTER TABLE leads
   ADD COLUMN IF NOT EXISTS ad_id        TEXT NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS referral_source_url TEXT NOT NULL DEFAULT '';
 
+-- Trazabilidad de etapas del deal (historial de stages desde Bitrix)
+ALTER TABLE kpi_conversaciones
+  ADD COLUMN IF NOT EXISTS fecha_nuevo        TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS fecha_prospecto    TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS fecha_escalamiento TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS fecha_seguimiento  TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS fecha_rescate1     TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS fecha_rescate2     TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS fecha_rescate3     TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS fecha_won          TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS fecha_lose         TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS tipificacion       TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS tiempo_bot_a_prospecto_segs  NUMERIC,
+  ADD COLUMN IF NOT EXISTS tiempo_prospecto_a_won_segs  NUMERIC,
+  ADD COLUMN IF NOT EXISTS rescates_enviados  INTEGER NOT NULL DEFAULT 0;
+
 -- Usuarios del dashboard KPI
 CREATE TABLE IF NOT EXISTS dashboard_users (
     id SERIAL PRIMARY KEY,

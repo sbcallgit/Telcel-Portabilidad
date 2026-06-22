@@ -186,9 +186,27 @@ class BitrixClient:
         return result
 
     async def get_deal(self, deal_id: str) -> dict:
-        """Retorna los campos del deal: STAGE_ID, ASSIGNED_BY_ID, SOURCE_ID, CLOSEDATE, CONTACT_ID."""
+        """Retorna los campos del deal: STAGE_ID, ASSIGNED_BY_ID, SOURCE_ID, CLOSEDATE, CONTACT_ID, COMMENTS."""
         result = await self._call("crm.deal.get", {"id": deal_id})
         return result.get("result", {})
+
+    async def get_stage_history(self, deal_id: str) -> list[dict]:
+        """Retorna el historial de etapas del deal ordenado cronológicamente.
+
+        Cada entrada tiene: STAGE_ID y CREATED_TIME (ISO 8601).
+        Usa crm.stagehistory.list con entityTypeId=2 (Deal).
+        """
+        try:
+            result = await self._call("crm.stagehistory.list", {
+                "entityTypeId": 2,
+                "filter": {"ENTITY_ID": deal_id},
+                "select": ["ID", "ENTITY_ID", "STAGE_ID", "CREATED_TIME"],
+                "order": {"CREATED_TIME": "ASC"},
+            })
+            return result.get("result", {}).get("items", [])
+        except Exception as exc:
+            logger.warning("bitrix_stage_history_error", extra={"deal_id": deal_id, "error": str(exc)})
+            return []
 
     async def marcar_venta_exitosa(self, deal_id: str) -> dict:
         """Mueve el deal a la etapa VENTA (C90:WON)."""
