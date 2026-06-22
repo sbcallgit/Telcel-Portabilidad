@@ -26,9 +26,16 @@ logger = logging.getLogger(__name__)
 TZ = pytz.timezone("America/Monterrey")
 
 
+def _mes_actual_range() -> tuple[datetime, datetime]:
+    """Retorna (inicio_del_mes, ahora) en UTC para filtrar el mes corriente."""
+    ahora = datetime.now(tz=TZ)
+    inicio = ahora.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    return inicio.astimezone(timezone.utc), ahora.astimezone(timezone.utc)
+
+
 async def _get_daily_stats() -> dict:
-    """KPIs agregados de las últimas 24h desde kpi_conversaciones."""
-    since = datetime.now(tz=timezone.utc) - timedelta(hours=24)
+    """KPIs agregados del 1° del mes hasta hoy desde kpi_conversaciones."""
+    inicio_mes, ahora = _mes_actual_range()
     rows = await db.fetch(
         """
         SELECT
@@ -41,17 +48,23 @@ async def _get_daily_stats() -> dict:
             ROUND(AVG(mensajes_bot::numeric / NULLIF(mensajes_totales,0) * 100), 1) AS pct_bot,
             ROUND(AVG(mensajes_cliente)::numeric, 1)                      AS msgs_cliente_prom
         FROM kpi_conversaciones
-        WHERE fecha_extraccion >= $1
+        WHERE creado_el >= $1 AND creado_el <= $2
         """,
-        since,
+        inicio_mes, ahora,
     )
     return dict(rows[0]) if rows else {}
 
 
 async def _build_csv() -> bytes:
-    """CSV completo de kpi_conversaciones como bytes."""
+    """CSV del mes actual (del día 1 hasta hoy) de kpi_conversaciones como bytes."""
+    inicio_mes, ahora = _mes_actual_range()
     rows = await db.fetch(
-        "SELECT * FROM kpi_conversaciones ORDER BY creado_el DESC NULLS LAST"
+        """
+        SELECT * FROM kpi_conversaciones
+        WHERE creado_el >= $1 AND creado_el <= $2
+        ORDER BY creado_el ASC
+        """,
+        inicio_mes, ahora,
     )
     if not rows:
         return b""
@@ -65,7 +78,7 @@ async def _build_csv() -> bytes:
     return buf.getvalue().encode("utf-8-sig")
 
 
-def _build_html(stats: dict, fecha: str) -> str:
+def _build_html(stats: dict, rango: str) -> str:
     total = stats.get("total") or 0
     con_asesor = stats.get("con_asesor") or 0
     ganadas = stats.get("ganadas") or 0
@@ -116,7 +129,7 @@ def _build_html(stats: dict, fecha: str) -> str:
 <div class="container">
   <div class="header">
     <h1>Reporte Diario — Bot Vera Portabilidad</h1>
-    <p>Muévete Prepago · Región 4 · {fecha}</p>
+    <p>Muévete Prepago · Región 4 · {rango}</p>
   </div>
   <div class="body">
     <div class="kpi-grid">
@@ -138,7 +151,7 @@ def _build_html(stats: dict, fecha: str) -> str:
       El archivo CSV adjunto contiene el detalle completo de todas las conversaciones registradas.
     </p>
   </div>
-  <div class="footer">Generado automáticamente a las 3:00 a.m. (America/Monterrey). No responder este correo.</div>
+  <div class="footer">Generado automáticamente a las 00:00 (America/Monterrey). No responder este correo.</div>
 </div>
 </body>
 </html>"""
@@ -177,16 +190,19 @@ async def send_kpi_report() -> None:
         return
 
     try:
-        fecha = datetime.now(tz=TZ).strftime("%d/%m/%Y")
-        fecha_archivo = datetime.now(tz=TZ).strftime("%Y%m%d")
-        subject = f"Reporte KPI Vera Portabilidad — {fecha}"
+        ahora = datetime.now(tz=TZ)
+        fecha = ahora.strftime("%d/%m/%Y")
+        fecha_archivo = ahora.strftime("%Y%m%d")
+        inicio_mes_str = ahora.replace(day=1).strftime("%d/%m/%Y")
+        subject = f"Reporte KPI Vera Portabilidad — {inicio_mes_str} al {fecha}"
 
         stats, csv_bytes = await asyncio.gather(
             _get_daily_stats(),
             _build_csv(),
         )
 
-        html = _build_html(stats, fecha)
+        rango = f"{inicio_mes_str} al {fecha}"
+        html = _build_html(stats, rango)
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _send_smtp, subject, html, csv_bytes, fecha_archivo)

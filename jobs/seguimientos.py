@@ -565,6 +565,7 @@ async def job_seguimientos() -> None:
 def create_scheduler() -> AsyncIOScheduler:
     from jobs.bitrix_sync import job_bitrix_sync
     from jobs.kpi_export import job_kpi_export
+    from jobs.email_report import send_kpi_report
 
     scheduler = AsyncIOScheduler(timezone=TZ)
     # Modo test: SEGUIMIENTOS_TEST_PHONE en .env limita el job a un solo teléfono.
@@ -587,6 +588,7 @@ def create_scheduler() -> AsyncIOScheduler:
         coalesce=True,
         misfire_grace_time=120,
     )
+    # Extracción nocturna de KPIs a las 3am
     scheduler.add_job(
         job_kpi_export,
         trigger="cron",
@@ -594,6 +596,18 @@ def create_scheduler() -> AsyncIOScheduler:
         minute=0,
         timezone=TZ,
         id="kpi_export",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # Reporte diario por correo a medianoche — incluye datos del 1° al día actual del mes
+    scheduler.add_job(
+        send_kpi_report,
+        trigger="cron",
+        hour=0,
+        minute=0,
+        timezone=TZ,
+        id="kpi_email_report",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,

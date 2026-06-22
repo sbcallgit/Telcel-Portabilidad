@@ -52,7 +52,9 @@ async def _ensure_graph_initialized() -> None:
 
 
 async def _list_threads() -> list[dict]:
-    """Retorna thread_id, creado_el y campos de estado del último checkpoint."""
+    """Retorna threads a procesar: nuevos (no están en kpi_conversaciones) o con actividad
+    en las últimas 24h (para refrescar stage de Bitrix y mensajes del asesor).
+    """
     rows = await db.fetch(
         """
         WITH latest AS (
@@ -60,7 +62,8 @@ async def _list_threads() -> list[dict]:
                 thread_id,
                 checkpoint->'channel_values'->>'etapa'          AS etapa,
                 checkpoint->'channel_values'->>'bitrix_lead_id' AS bitrix_lead_id,
-                checkpoint->'channel_values'->>'customer_phone' AS customer_phone
+                checkpoint->'channel_values'->>'customer_phone' AS customer_phone,
+                (checkpoint->>'ts')::timestamptz                AS ultimo_checkpoint
             FROM checkpoints
             WHERE checkpoint_ns = ''
             ORDER BY thread_id, checkpoint_id DESC
@@ -73,10 +76,15 @@ async def _list_threads() -> list[dict]:
             WHERE checkpoint_ns = ''
             ORDER BY thread_id, checkpoint_id ASC
         )
-        SELECT l.thread_id, l.etapa, l.bitrix_lead_id, l.customer_phone, e.creado_el
+        SELECT l.thread_id, l.etapa, l.bitrix_lead_id, l.customer_phone,
+               e.creado_el, l.ultimo_checkpoint
         FROM latest l
         JOIN earliest e ON l.thread_id = e.thread_id
         WHERE e.creado_el > NOW() - INTERVAL '30 days'
+          AND (
+            l.thread_id NOT IN (SELECT id_conversacion FROM kpi_conversaciones)
+            OR l.ultimo_checkpoint > NOW() - INTERVAL '24 hours'
+          )
         ORDER BY e.creado_el DESC
         LIMIT 500
         """,
@@ -328,7 +336,12 @@ async def _upsert(thread: dict) -> None:
     texto_agente = msg_data.get("texto_agente", "")
     texto_humano = chat.get("texto_humano", "")
 
-    resumen = await _generate_summary(texto_usuario, texto_agente, texto_humano, etapa)
+    # Reutilizar resumen existente para evitar llamada LLM en conversaciones ya procesadas.
+    existing = await db.fetchrow(
+        "SELECT resumen FROM kpi_conversaciones WHERE id_conversacion = $1", phone
+    )
+    resumen_existente = existing["resumen"] if existing else ""
+    resumen = resumen_existente or await _generate_summary(texto_usuario, texto_agente, texto_humano, etapa)
 
     await db.execute(
         """
@@ -434,8 +447,6 @@ async def job_kpi_export() -> None:
         extra={"total": len(threads), "procesados": procesados, "errores": errores, "duracion_s": duracion},
     )
 
-    from jobs.email_report import send_kpi_report
-    await send_kpi_report()
 
 
 async def export_to_csv(filepath: str | None = None) -> str:
