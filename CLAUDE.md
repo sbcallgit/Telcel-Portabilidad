@@ -31,6 +31,8 @@
 | Jobs | APScheduler | Seguimientos automáticos |
 | CRM | Bitrix24 | Pipeline operativo y tipificaciones |
 | Escalamiento | Bitrix24 Open Lines | Handoff al asesor humano (imconnector) |
+| Dashboard KPI | Angular 18 (standalone) | Visualización de KPIs — acceso por correo/contraseña (JWT) |
+| Meta Ads | `facebook-business` SDK | Ad Insights (gasto, clics, CPL) + Conversions API (CAPI) |
 
 ---
 
@@ -66,7 +68,7 @@ bot_telcel_portabilidad/
 │   ├── debounce.py          # Motor de debounce — agrupa mensajes consecutivos por número
 │   ├── whatsapp/
 │   │   ├── client.py        # WhatsAppClient.send_message() — httpx + tenacity
-│   │   └── handlers.py      # verify_webhook_signature() — HMAC-SHA256
+│   │   └── handlers.py      # verify_webhook_signature() + parse_whatsapp_message() (retorna referral)
 │   ├── bitrix/
 │   │   ├── client.py        # BitrixClient — crear_deal(), actualizar_deal(), mover etapa
 │   │   ├── oauth.py         # OAuth tokens — exchange, refresh, Redis-backed
@@ -78,16 +80,22 @@ bot_telcel_portabilidad/
 │   │   └── client.py        # Pool asyncpg — execute/fetch/fetchrow parametrizados
 │   ├── vicidial/
 │   │   └── client.py        # agregar_lead() — GET a non_agent_api.php (Rescate 3)
-│   └── qdrant/
-│       └── client.py        # RAG semántico — index_objeciones(), search_objection()
+│   ├── qdrant/
+│   │   └── client.py        # RAG semántico — index_objeciones(), search_objection()
+│   ├── meta/
+│   │   ├── insights.py      # get_insights() — Ad Insights vía facebook-business SDK (async)
+│   │   └── conversions.py   # send_purchase_event(), send_lead_event() — CAPI v20
+│   └── megacable_db.py      # fetch_megacable() — conexión de solo lectura a BD bot_megacable
 │
 ├── api/                     # Endpoints HTTP
-│   ├── main.py              # App FastAPI — lifespan, middleware de logging
+│   ├── main.py              # App FastAPI — lifespan, middleware de logging, CORS con Authorization
+│   ├── deps.py              # require_auth() — acepta Bearer JWT o X-Admin-Token
 │   └── routes/
 │       ├── health.py        # GET /health — status ok/degraded + check de DB
-│       ├── webhooks.py      # POST/GET /webhooks/telcel — entry point de WhatsApp
+│       ├── auth.py          # POST /auth/login — JWT 8h; GET /auth/me
+│       ├── webhooks.py      # POST/GET /webhooks/telcel — captura referral Click-to-WhatsApp
 │       ├── telegram.py      # POST /webhooks/telegram — entry point de Telegram (pruebas)
-│       └── admin.py         # POST /admin/kpi-export; POST /admin/kpi-email; POST /admin/seguimiento-test; POST /admin/vicidial-test (X-Admin-Token)
+│       └── admin.py         # Endpoints de administración y datos (ver tabla abajo)
 │
 ├── db/                      # Capa de datos
 │   ├── models.py            # Modelos Pydantic: Lead, Lada, Promo, CAC, Objecion
@@ -114,10 +122,38 @@ bot_telcel_portabilidad/
 │   ├── settings.py          # Pydantic BaseSettings — todas las vars de entorno
 │   └── logging.py           # JSON logging + mask_phone()
 │
+├── dashboard/               # Dashboard KPI — Angular 18
+│   └── src/app/
+│       ├── pages/
+│       │   ├── login/       # Formulario email + contraseña → JWT
+│       │   └── dashboard/   # KPIs Telcel, Meta Ads Insights, UTM, Megacable
+│       └── services/
+│           ├── auth.service.ts   # login(), logout(), getToken()
+│           └── kpi.service.ts    # getData(), getMetaInsights(), getUtmData(), getMegacableData()
+│
+├── scripts/
+│   └── seed_dashboard_users.py  # Crea usuarios iniciales del dashboard (bcrypt)
+│
 └── tests/
     ├── unit/                # Tests con mocks de APIs externas
     └── scenarios/           # Tests de conversaciones completas (regresión de auditoría)
 ```
+
+### Endpoints admin (`/admin/*`)
+
+| Endpoint | Método | Descripción |
+|---|---|---|
+| `/admin/kpi-data` | GET | KPIs de Telcel desde `kpi_conversaciones` (paginado, filtros) |
+| `/admin/kpi-export` | POST | Dispara regeneración de `kpi_conversaciones` en background |
+| `/admin/kpi-email` | POST | Envía reporte KPI por correo inmediatamente |
+| `/admin/seguimiento-test` | POST | Fuerza Rescate 1 o 2 para un teléfono específico |
+| `/admin/vicidial-test` | POST | Dispara llamada Vicidial (Rescate 3) — `simulate=true` para prueba |
+| `/admin/meta-insights` | GET | Ad Insights de Meta (gasto, clics, CPL) con filtro fecha y nivel |
+| `/admin/capi-test` | POST | Dispara evento CAPI manualmente — `simulate=true` para prueba |
+| `/admin/utm-data` | GET | Atribución UTM desde tabla `leads` — por campaña, fuente y ad_id |
+| `/admin/megacable-data` | GET | KPIs del agente Megacable desde BD externa |
+
+Todos los endpoints aceptan `X-Admin-Token` (header) **o** `Authorization: Bearer <JWT>`.
 
 ---
 
@@ -177,6 +213,18 @@ Ver `.env.example` para la lista completa. Nunca commitear `.env`.
 | `SMTP_USER` | Correo remitente (ej. `crm1@callcomcc.cloud`) |
 | `SMTP_PASS` | Contraseña del correo remitente |
 | `REPORT_EMAIL_TO` | Destinatarios del reporte KPI separados por coma (ej. `a@x.com,b@x.com`) |
+| `JWT_SECRET` | Secreto para firmar tokens JWT del dashboard (cambiar en producción) |
+| `JWT_EXPIRE_HOURS` | Duración del JWT en horas (default: `8`) |
+| `META_APP_ID` | App ID de Meta for Developers (`874313662396190`) |
+| `META_APP_SECRET` | App Secret de Meta (no mezclar con `WHATSAPP_APP_SECRET`) |
+| `META_ACCESS_TOKEN` | System User Token con permiso `ads_read` (y `ads_management` para CAPI) |
+| `META_AD_ACCOUNT_ID` | Cuenta de anuncios activa (ej. `act_3292969264212775` — Portabilidad 2 Callcom) |
+| `META_PIXEL_ID` | ID del Pixel de Meta para Conversions API (ej. `1654668329217239`) |
+| `MEGACABLE_DB_HOST` | Host de la BD del agente Megacable (ej. `147.79.78.75`) |
+| `MEGACABLE_DB_PORT` | Puerto PostgreSQL de Megacable (default: `5433`) |
+| `MEGACABLE_DB_NAME` | Nombre de la BD (`bot_megacable`) |
+| `MEGACABLE_DB_USER` | Usuario de la BD Megacable |
+| `MEGACABLE_DB_PASSWORD` | Contraseña de la BD Megacable |
 
 ---
 
@@ -552,3 +600,126 @@ Ambos endpoints retornan `{"status": "started"}` inmediatamente y corren en back
 - **Ruta en host:** `./reporteskpi/kpi_conversaciones_{YYYYMMDD_HHMM}.csv` (volumen bind mount en `docker-compose.yml`)
 - Encoding `utf-8-sig` (compatible con Excel / Power BI sin problemas de tildes)
 - La carpeta `./reporteskpi/` está en `.gitignore` — los CSVs no se suben al repo
+
+---
+
+## Dashboard KPI (Angular)
+
+Panel web en `dashboard/` — accesible en `https://portabilidad.callcomcc.io/dashboard/`.
+
+### Autenticación
+
+- **Login:** `POST /auth/login` con `{ email, password }` → JWT HS256 con expiración de 8h
+- **Tabla:** `dashboard_users` (PostgreSQL) — columnas: `id`, `email`, `nombre`, `password_hash` (bcrypt), `activo`, `last_login`
+- **Usuarios iniciales:** sbecerra@callcom.mx, passpace04@gmail.com (L. Salazar), mbecerra@callcom.mx — contraseña `Callcom.2025`
+- **Seed:** `docker compose exec api python scripts/seed_dashboard_users.py`
+- **Compatibilidad:** el header `X-Admin-Token` sigue funcionando para scripts/curl (backward compatible)
+
+### Secciones del dashboard
+
+1. **Telcel Portabilidad** — KPI cards, distribución por stage (doughnut), mensajes por actor (bar), tabla de conversaciones paginada con filtros (fecha, stage, búsqueda)
+2. **Meta Ads — Portabilidad 2 Callcom** — gasto, impresiones, clics, CTR, conversaciones WhatsApp, CPL; gráfica gasto vs conversaciones; tabla detallada. Filtro por fecha y nivel (campaña/conjunto/anuncio)
+3. **Atribución UTM** — leads con UTM capturado, ventas atribuidas; gráfica por fuente; tabla por campaña con tasa de conversión; tabla por Ad ID
+4. **Megacable** — KPI cards del agente Megacable (BD externa), gráficas de estado y mensajes por actor, tabla de conversaciones recientes. Filtro por fecha independiente
+
+### Notas del dashboard
+
+- **`@ViewChild` + `@if`:** los canvas de Chart.js viven dentro de bloques `@if` de Angular. `renderCharts()` se llama con `setTimeout(0)` después de setear `loading = false` para asegurar que el DOM ya renderizó antes de acceder al canvas. Sin el `setTimeout`, el `@ViewChild` devuelve `undefined`.
+- **Rebuild:** cualquier cambio en `dashboard/` requiere `docker compose build dashboard && docker compose up -d dashboard`.
+
+---
+
+## Atribución UTM / Click-to-WhatsApp
+
+### Captura en el webhook
+
+Cuando un lead llega desde un anuncio Meta Ads Click-to-WhatsApp, Meta incluye un objeto `referral` en el payload del webhook:
+
+```json
+{
+  "referral": {
+    "source_id": "120246547033570677",   // Ad ID
+    "source_type": "ad",
+    "source_url": "https://...?utm_source=facebook&utm_campaign=...",
+    "ctwa_clid": "ARAkLkA8..."           // Click-to-WhatsApp Click ID
+  }
+}
+```
+
+**Flujo:**
+1. `parse_whatsapp_message()` (`handlers.py`) retorna `(phone, text, message_id, referral)` — 4 campos
+2. El webhook guarda el referral en Redis como `wa_referral:{phone}` (TTL 24h)
+3. `_upsert_lead_primer_contacto()` en `validacion_node` lee ese Redis, parsea los UTMs de `source_url` y hace upsert en `leads`
+
+**Columnas UTM en `leads`:** `utm_source`, `utm_medium`, `utm_campaign`, `utm_content`, `utm_term`, `ctwa_clid`, `ad_id`, `referral_source_url`
+
+**Política de no sobreescritura:** el `ON CONFLICT` solo actualiza los campos UTM si están vacíos en la fila existente — el primer anuncio que origina el lead siempre se preserva.
+
+### Clave Redis
+
+| Clave | Contenido |
+|---|---|
+| `wa_referral:{phone}` | JSON del objeto `referral` del webhook (TTL 24h) |
+
+---
+
+## Meta Ads Integration
+
+### Caso A — Ad Insights (`integrations/meta/insights.py`)
+
+Consulta métricas de la cuenta **Portabilidad 2 Callcom** (`act_3292969264212775`) vía `facebook-business` SDK.
+
+- **Función:** `get_insights(date_preset, since, until, level)` — async (ejecuta en executor)
+- **Campos:** `impressions`, `reach`, `clicks`, `spend`, `cpc`, `cpm`, `ctr`, `actions`
+- **Conversaciones WhatsApp:** extrae `onsite_conversion.total_messaging_connection` de `actions`
+- **Niveles:** `campaign` / `adset` / `ad` — seleccionable desde el dashboard
+- **Init del SDK:** solo con `access_token`, sin `app_secret` — evita conflicto de `appsecret_proof` con otras apps del entorno
+
+**Endpoint:** `GET /admin/meta-insights?desde=YYYY-MM-DD&hasta=YYYY-MM-DD&level=campaign`
+
+### Caso B — Conversions API / CAPI (`integrations/meta/conversions.py`)
+
+Envía eventos de conversión a Meta para optimización del algoritmo de anuncios.
+
+**Pixel:** `1654668329217239` (Pixel de Portabilidad — business "Portabilidad Secundaria Callcom")
+
+**Eventos:**
+- **`Purchase`** → cuando `job_bitrix_sync` detecta transición a `C90:WON`. Incluye teléfono hasheado SHA-256, `ctwa_clid` (si existe) y recarga como valor de conversión
+- **`Lead`** → cuando `job_bitrix_sync` detecta transición a `C90:PROSPECTO`
+
+**Flujo automático:**
+```
+Asesor mueve deal a C90:WON en Bitrix
+        ↓
+job_bitrix_sync (cada 30 min) detecta el cambio de stage
+        ↓
+_fire_capi_if_needed() → lee telefono + ctwa_clid desde leads
+        ↓
+send_purchase_event() → POST /v20.0/{pixel_id}/events (CAPI)
+```
+
+**Deduplicación:** `event_id = "won_{deal_id}"` — Meta descarta duplicados con el mismo `event_id` en 7 días.
+
+**Endpoint de prueba:**
+```bash
+curl -X POST https://portabilidad.callcomcc.io/admin/capi-test \
+  -H "X-Admin-Token: <ADMIN_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"telefono":"521XXXXXXXXXX","deal_id":"12345","evento":"Purchase","recarga":200}'
+
+# simulate=true para validar sin enviar a Meta
+```
+
+---
+
+## Integración Megacable (BD externa)
+
+El dashboard incluye una sección de KPIs para el agente Megacable que vive en una BD PostgreSQL separada (`bot_megacable`, host `147.79.78.75:5433`).
+
+**Módulo:** `integrations/megacable_db.py` — `fetch_megacable(query, *args)` abre una conexión asyncpg por consulta (sin pool — solo lectura, baja frecuencia).
+
+**Tablas consultadas:** `conversations`, `conversation_history`, `agent_runs`
+
+**Endpoint:** `GET /admin/megacable-data?desde=YYYY-MM-DD&hasta=YYYY-MM-DD`
+
+**Nota:** el cliente asyncpg de la BD interna (Telcel) requiere objetos `datetime` como parámetros, no strings. Los endpoints que filtran por fecha convierten `date` → `datetime(year, month, day, tzinfo=utc)` antes de pasar a la query.
