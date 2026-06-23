@@ -3,7 +3,7 @@ import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Chart, registerables } from 'chart.js';
-import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow } from '../../services/kpi.service';
+import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow, FunnelData } from '../../services/kpi.service';
 import { AuthService } from '../../services/auth.service';
 
 Chart.register(...registerables);
@@ -78,6 +78,13 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   metaHasta = '';
   metaLevel = 'campaign';
 
+  funnelData: FunnelData | null = null;
+  funnelLoading = true;
+  funnelError = '';
+
+  @ViewChild('funnelChart') funnelChartRef!: ElementRef<HTMLCanvasElement>;
+  private funnelChart?: Chart;
+
   @ViewChild('metaSpendChart') metaSpendChartRef!: ElementRef<HTMLCanvasElement>;
   private metaSpendChart?: Chart;
 
@@ -101,6 +108,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
 
   ngOnInit(): void {
     this.load();
+    this.loadFunnel();
     this.loadMeta();
     this.loadUtm();
     this.loadMegacable();
@@ -109,6 +117,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   ngAfterViewInit(): void {
     this.chartsReady = true;
     if (this.resumen) this.renderCharts();
+    if (this.funnelData) this.renderFunnelChart();
     if (this.metaData) this.renderMetaChart();
     if (this.utmData) this.renderUtmChart();
     if (this.megacableData) this.renderMegacableCharts();
@@ -117,6 +126,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   ngOnDestroy(): void {
     this.stageChart?.destroy();
     this.msgChart?.destroy();
+    this.funnelChart?.destroy();
     this.metaSpendChart?.destroy();
     this.utmFuenteChart?.destroy();
     this.mgEstadoChart?.destroy();
@@ -155,6 +165,77 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
           this.loading = false;
         },
       });
+  }
+
+  loadFunnel(): void {
+    this.funnelLoading = true;
+    this.funnelError = '';
+    this.kpiSvc.getFunnelData(this.desde || undefined, this.hasta || undefined).subscribe({
+      next: (data) => {
+        this.funnelData = data;
+        this.funnelLoading = false;
+        if (this.chartsReady) setTimeout(() => this.renderFunnelChart(), 0);
+      },
+      error: () => {
+        this.funnelError = 'Error al cargar funnel.';
+        this.funnelLoading = false;
+      },
+    });
+  }
+
+  private renderFunnelChart(): void {
+    if (!this.funnelData || !this.funnelChartRef) return;
+    this.funnelChart?.destroy();
+    const stages = this.funnelData.stages;
+    const max = stages[0]?.total || 1;
+    const colors = stages.map(s => {
+      if (s.stage === 'C90:WON')  return '#10b981';
+      if (s.stage === 'C90:LOSE') return '#94a3b8';
+      if (s.stage === 'C90:NEW')  return '#e8001d';
+      return '#3b82f6';
+    });
+    this.funnelChart = new Chart(this.funnelChartRef.nativeElement, {
+      type: 'bar',
+      data: {
+        labels: stages.map(s => s.label),
+        datasets: [{
+          label: 'Deals',
+          data: stages.map(s => s.total),
+          backgroundColor: colors,
+          borderRadius: 5,
+          borderSkipped: false,
+        }],
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const val = ctx.parsed.x ?? 0;
+                const pct = max > 0 ? ((val / max) * 100).toFixed(1) : '0';
+                return ` ${val} deals (${pct}%)`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            beginAtZero: true,
+            max,
+            grid: { color: '#f1f5f9' },
+            ticks: { font: { family: 'Inter' } },
+          },
+          y: {
+            grid: { display: false },
+            ticks: { font: { family: 'Inter', size: 12 } },
+          },
+        },
+      },
+    });
   }
 
   applyMgFilter(): void {
@@ -328,6 +409,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
 
   applyFilter(): void {
     this.load(1);
+    this.loadFunnel();
     this.loadMegacable();
   }
 
@@ -337,6 +419,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.stageFilter = '';
     this.search = '';
     this.load(1);
+    this.loadFunnel();
     this.loadMegacable();
   }
 

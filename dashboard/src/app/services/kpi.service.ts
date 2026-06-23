@@ -142,6 +142,16 @@ export interface UtmData {
   por_fuente: UtmFuente[];
 }
 
+export interface FunnelStage {
+  stage: string;
+  label: string;
+  total: number;
+}
+
+export interface FunnelData {
+  stages: FunnelStage[];
+}
+
 export interface MegacableData {
   resumen: MegacableResumen;
   por_estado: { estado: string; cantidad: number }[];
@@ -196,6 +206,13 @@ export class KpiService {
       headers: this.headers,
       params,
     });
+  }
+
+  getFunnelData(desde?: string, hasta?: string): Observable<FunnelData> {
+    let params = new HttpParams();
+    if (desde) params = params.set('desde', desde);
+    if (hasta) params = params.set('hasta', hasta);
+    return this.http.get<FunnelData>('/api/admin/funnel-data', { headers: this.headers, params });
   }
 
   triggerExport(): Observable<{ status: string; message: string }> {

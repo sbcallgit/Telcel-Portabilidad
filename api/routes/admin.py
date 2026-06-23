@@ -652,3 +652,51 @@ async def get_megacable_data(
     except Exception as exc:
         logger.error("megacable_data_error", extra={"error": str(exc)})
         raise HTTPException(status_code=503, detail=f"Error conectando a BD Megacable: {exc}")
+
+
+@router.get("/funnel-data")
+async def get_funnel_data(
+    _: AuthDep,
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+) -> JSONResponse:
+    """Funnel de conversión desde bitrix_deal_timeline — cuántos deals llegaron a cada stage."""
+    from integrations.postgres import client as db
+    from datetime import datetime, timezone as tz
+
+    desde_ts = datetime(desde.year, desde.month, desde.day, 0, 0, 0, tzinfo=tz.utc) if desde \
+        else datetime(2000, 1, 1, tzinfo=tz.utc)
+    hasta_ts = datetime(hasta.year, hasta.month, hasta.day, 23, 59, 59, tzinfo=tz.utc) if hasta \
+        else datetime(2099, 12, 31, 23, 59, 59, tzinfo=tz.utc)
+
+    row = await db.fetchrow(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE fecha_new IS NOT NULL)          AS new,
+            COUNT(*) FILTER (WHERE fecha_prospecto IS NOT NULL)    AS prospecto,
+            COUNT(*) FILTER (WHERE fecha_escalamiento IS NOT NULL) AS escalamiento,
+            COUNT(*) FILTER (WHERE fecha_seguimiento IS NOT NULL)  AS seguimiento,
+            COUNT(*) FILTER (WHERE fecha_rescate1 IS NOT NULL)     AS rescate1,
+            COUNT(*) FILTER (WHERE fecha_rescate2 IS NOT NULL)     AS rescate2,
+            COUNT(*) FILTER (WHERE fecha_rescate3 IS NOT NULL)     AS rescate3,
+            COUNT(*) FILTER (WHERE fecha_won IS NOT NULL)          AS won,
+            COUNT(*) FILTER (WHERE fecha_lose IS NOT NULL)         AS lose
+        FROM bitrix_deal_timeline
+        WHERE fecha_new >= $1 AND fecha_new <= $2
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    r = dict(row) if row else {}
+    stages = [
+        {"stage": "C90:NEW",        "label": "IA Porta",          "total": int(r.get("new", 0) or 0)},
+        {"stage": "C90:PROSPECTO",  "label": "Prospecto",         "total": int(r.get("prospecto", 0) or 0)},
+        {"stage": "C90:UC_8WB2DT",  "label": "Escalamiento",      "total": int(r.get("escalamiento", 0) or 0)},
+        {"stage": "C90:SEGUIMIENTO","label": "Seguimiento",        "total": int(r.get("seguimiento", 0) or 0)},
+        {"stage": "C90:1",          "label": "Rescate 1",         "total": int(r.get("rescate1", 0) or 0)},
+        {"stage": "C90:2",          "label": "Rescate 2",         "total": int(r.get("rescate2", 0) or 0)},
+        {"stage": "C90:3",          "label": "Rescate 3",         "total": int(r.get("rescate3", 0) or 0)},
+        {"stage": "C90:WON",        "label": "Venta",             "total": int(r.get("won", 0) or 0)},
+        {"stage": "C90:LOSE",       "label": "Caído",             "total": int(r.get("lose", 0) or 0)},
+    ]
+    return JSONResponse({"stages": stages})

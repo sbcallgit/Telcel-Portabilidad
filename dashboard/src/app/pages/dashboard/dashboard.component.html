@@ -95,6 +95,16 @@
         </div>
       </div>
 
+      <!-- Funnel de conversión -->
+      @if (!funnelLoading && !funnelError && funnelData) {
+        <div class="chart-card" style="margin-top:1.5rem">
+          <h3>Funnel de conversión</h3>
+          <div class="chart-wrap" style="height:280px">
+            <canvas #funnelChart></canvas>
+          </div>
+        </div>
+      }
+
       <!-- Gráficas -->
       <div class="charts-row">
         <div class="chart-card">
