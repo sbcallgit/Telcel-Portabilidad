@@ -334,6 +334,23 @@ async def log_mensaje_evento(
             "SELECT bitrix_stage FROM leads WHERE telefono = $1", phone
         )
         stage_id = (row["bitrix_stage"] if row else "") or ""
+
+        # Fallback 1: último evento de sistema registrado para esta conversación
+        if not stage_id:
+            sys_row = await db.fetchrow(
+                """
+                SELECT stage_id FROM bitrix_eventos
+                WHERE id_conversacion = $1 AND tipo_actor = 'sistema'
+                ORDER BY fecha_evento DESC LIMIT 1
+                """,
+                phone,
+            )
+            stage_id = (sys_row["stage_id"] if sys_row else "") or ""
+
+        # Fallback 2: todos los deals nuevos arrancan en C90:NEW
+        if not stage_id:
+            stage_id = "C90:NEW"
+
         stage_nombre = _STAGE_NOMBRES.get(stage_id, stage_id)
 
         canal = "telegram" if phone.startswith("tg_") else "whatsapp"
