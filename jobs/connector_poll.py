@@ -30,6 +30,37 @@ async def _forward_to_user(phone: str, text: str) -> None:
         await _wa.send_message(phone, text)
 
 
+_BOT_COMMANDS: dict[str, bool] = {
+    "desactivar bot": True,
+    "pausar bot":     True,
+    "activar bot":    False,
+    "reactivar bot":  False,
+}
+
+
+async def _handle_bot_command(phone: str, text: str, msg_id: str, redis: object) -> bool:
+    """Intercepta comandos del asesor. Retorna True si el mensaje es un comando (no reenviar)."""
+    cmd = text.strip().lower()
+    if cmd not in _BOT_COMMANDS:
+        return False
+
+    pause = _BOT_COMMANDS[cmd]
+    key = f"bot_pausado:{phone}"
+
+    if pause:
+        await redis.set(key, "1")  # type: ignore[union-attr]
+        action = "pausado"
+    else:
+        await redis.delete(key)  # type: ignore[union-attr]
+        action = "activado"
+
+    logger.info(
+        "bot_command_from_asesor",
+        extra={"phone_tail": phone[-4:], "comando": cmd, "action": action, "msg_id": msg_id},
+    )
+    return True
+
+
 async def _poll_phone(phone: str, chat_id: str, redis: object) -> None:
     from integrations.bitrix.connector import poll_asesor_messages
     try:
@@ -43,6 +74,11 @@ async def _poll_phone(phone: str, chat_id: str, redis: object) -> None:
         if await redis.get(dedup_key):  # type: ignore[union-attr]
             continue
         try:
+            # Comandos internos del asesor — no se reenvían al usuario
+            if await _handle_bot_command(phone, text, msg_id, redis):
+                await redis.setex(dedup_key, 86400, "1")  # type: ignore[union-attr]
+                continue
+
             await _forward_to_user(phone, text)
             await redis.setex(dedup_key, 86400, "1")  # type: ignore[union-attr]
             logger.info("asesor_msg_forwarded", extra={
