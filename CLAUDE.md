@@ -628,6 +628,14 @@ Tabla independiente de `kpi_conversaciones`. Una fila por evento del canal Bitri
 | `stage_anterior_nombre` | Nombre legible del stage anterior |
 | `duracion_en_stage_segs` | Segundos que el deal estuvo en `stage_anterior` antes de esta transición |
 | `duracion_formateada` | Formato legible: `"8m 48s"`, `"1h 22m 05s"` |
+| `ultimo_mensaje_usuario` | Último texto enviado por el cliente al momento del cambio de stage |
+| `fecha_ultimo_usuario` | Timestamp de ese mensaje (desde Bitrix Open Lines) |
+| `ultimo_mensaje_bot` | Última respuesta de Vera al momento del cambio de stage (sin prefijo `🤖 Vera \|`) |
+| `fecha_ultimo_bot` | Timestamp de esa respuesta |
+| `ultimo_mensaje_humano` | Último mensaje del asesor humano al momento del cambio de stage |
+| `fecha_ultimo_humano` | Timestamp de ese mensaje |
+
+**Nota:** los campos `ultimo_mensaje_*` y `fecha_ultimo_*` se capturan únicamente en eventos `tipo_actor = 'sistema'` (cambios de stage), consultando `im.dialog.messages.get` en el momento exacto del webhook. Si el deal no tiene `chat_id` en Redis aún, estos campos quedan vacíos.
 
 ### Webhook de automatización (`POST /bitrix/stage-event`)
 
@@ -643,7 +651,7 @@ Endpoint que recibe el webhook de las reglas de automatización de Bitrix cuando
 | `stage_id` | `{=Document:STAGE_ID}` |
 | `prev_stage` | `{=Document:PREVIOUS_STAGE_ID}` |
 
-Si `stage_id` no viene en el payload, el endpoint lo consulta directamente a Bitrix vía `crm.deal.get`. La duración se calcula como diferencia entre el evento previo registrado en la tabla y el timestamp del webhook.
+Si `stage_id` no viene en el payload, el endpoint lo consulta directamente a Bitrix vía `crm.deal.get`. La duración se calcula como diferencia entre el evento previo registrado en la tabla y el timestamp del webhook. Para el **primer evento de un deal** (sin historial previo en la tabla), se consulta `crm.stagehistory.list` para obtener cuándo entró al stage anterior y calcular la duración real.
 
 **Mapa de stages** (pipeline 90):
 
@@ -669,18 +677,21 @@ Si `stage_id` no viene en el payload, el endpoint lo consulta directamente a Bit
 ### Consultas útiles
 
 ```sql
--- Timeline completo de un deal
+-- Timeline completo de un deal con snapshot de mensajes en cada transición
+SELECT fecha_evento, stage_anterior_nombre || ' → ' || stage_nombre AS transicion,
+       duracion_formateada,
+       ultimo_mensaje_usuario, fecha_ultimo_usuario,
+       ultimo_mensaje_bot, fecha_ultimo_bot,
+       ultimo_mensaje_humano, fecha_ultimo_humano
+FROM bitrix_eventos
+WHERE deal_id = '2302394' AND tipo_actor = 'sistema'
+ORDER BY fecha_evento;
+
+-- Timeline completo con todos los eventos
 SELECT fecha_evento, tipo_actor, stage_nombre, stage_anterior_nombre, duracion_formateada, texto
 FROM bitrix_eventos
 WHERE deal_id = '2302394'
 ORDER BY fecha_evento;
-
--- Último mensaje de cada actor por conversación
-SELECT DISTINCT ON (id_conversacion, tipo_actor)
-    id_conversacion, tipo_actor, texto AS ultimo_mensaje, fecha_evento
-FROM bitrix_eventos
-WHERE tipo_actor != 'sistema'
-ORDER BY id_conversacion, tipo_actor, fecha_evento DESC;
 ```
 
 ---

@@ -169,19 +169,77 @@ async def bitrix_stage_event(request: Request) -> dict:
     )
 
     if prev_evento:
-        # Si Bitrix no envió prev_stage, usamos el último stage registrado en nuestra tabla
+        # Hay evento previo en nuestra tabla — calcular desde ahí
         if not prev_stage:
             prev_stage = prev_evento["stage_id"]
         delta = (now - prev_evento["fecha_evento"]).total_seconds()
         if delta >= 0:
             duracion_segs = round(delta, 1)
             duracion_fmt = _fmt_duracion(delta)
+    elif prev_stage:
+        # Primer evento del deal — consultar crm.stagehistory.list para saber
+        # cuándo entró al stage anterior y calcular duración real
+        try:
+            from integrations.bitrix.client import BitrixClient
+            bx = BitrixClient()
+            history = await bx.get_stage_history(deal_id)
+            # Buscar la última vez que el deal llegó a prev_stage
+            entrada_prev: datetime | None = None
+            for entry in reversed(history):
+                if entry.get("STAGE_ID") == prev_stage:
+                    ts_raw = entry.get("CREATED_TIME")
+                    if ts_raw:
+                        try:
+                            entrada_prev = datetime.fromisoformat(str(ts_raw)).astimezone(timezone.utc)
+                        except (ValueError, TypeError):
+                            pass
+                    break
+            if entrada_prev:
+                delta = (now - entrada_prev).total_seconds()
+                if delta >= 0:
+                    duracion_segs = round(delta, 1)
+                    duracion_fmt = _fmt_duracion(delta)
+        except Exception as exc:
+            logger.warning("bitrix_stage_event_history_error", extra={"deal_id": deal_id, "error": str(exc)})
 
     stage_nombre      = _STAGE_NOMBRES.get(stage_id, stage_id)
     prev_stage_nombre = _STAGE_NOMBRES.get(prev_stage, prev_stage) if prev_stage else ""
     id_conversacion   = phone or deal_id
     message_id        = f"stage_{stage_id}_{int(now.timestamp())}"
     texto             = f"Etapa → {stage_nombre}"
+
+    # Obtener últimos mensajes por actor desde el chat de Bitrix Open Lines
+    ult_msg_usuario = ""
+    fecha_ult_usuario: datetime | None = None
+    ult_msg_bot = ""
+    fecha_ult_bot: datetime | None = None
+    ult_msg_humano = ""
+    fecha_ult_humano: datetime | None = None
+
+    if chat_id:
+        try:
+            from integrations.bitrix.connector import _call_poll
+            from jobs.kpi_eventos import _parse_messages, _to_utc as _kpi_to_utc
+            result = await _call_poll("im.dialog.messages.get", {
+                "DIALOG_ID": f"chat{chat_id}",
+                "LIMIT": 200,
+            })
+            msgs_raw = sorted(
+                result.get("result", {}).get("messages", []),
+                key=lambda m: int(m.get("id", 0)),
+            )
+            for msg_id_m, fecha_m, tipo_m, texto_m in _parse_messages(msgs_raw):
+                if tipo_m == "usuario":
+                    ult_msg_usuario = texto_m
+                    fecha_ult_usuario = fecha_m
+                elif tipo_m == "bot":
+                    ult_msg_bot = texto_m.replace("🤖 Vera | ", "", 1)
+                    fecha_ult_bot = fecha_m
+                elif tipo_m == "humano":
+                    ult_msg_humano = texto_m
+                    fecha_ult_humano = fecha_m
+        except Exception as exc:
+            logger.warning("bitrix_stage_event_msgs_error", extra={"deal_id": deal_id, "error": str(exc)})
 
     await db.execute(
         """
@@ -190,8 +248,11 @@ async def bitrix_stage_event(request: Request) -> dict:
             message_id, fecha_evento, tipo_actor, texto,
             stage_id, stage_nombre, empleado_id,
             stage_anterior, stage_anterior_nombre,
-            duracion_en_stage_segs, duracion_formateada
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            duracion_en_stage_segs, duracion_formateada,
+            ultimo_mensaje_usuario, fecha_ultimo_usuario,
+            ultimo_mensaje_bot,     fecha_ultimo_bot,
+            ultimo_mensaje_humano,  fecha_ultimo_humano
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
         ON CONFLICT (id_conversacion, message_id, tipo_actor) DO NOTHING
         """,
         id_conversacion, deal_id, chat_id, bitrix_conversation_id, phone,
@@ -199,6 +260,9 @@ async def bitrix_stage_event(request: Request) -> dict:
         stage_id, stage_nombre, empleado_id,
         prev_stage, prev_stage_nombre,
         duracion_segs, duracion_fmt,
+        ult_msg_usuario, fecha_ult_usuario,
+        ult_msg_bot,     fecha_ult_bot,
+        ult_msg_humano,  fecha_ult_humano,
     )
 
     logger.info(

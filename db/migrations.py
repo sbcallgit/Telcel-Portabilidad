@@ -201,6 +201,13 @@ CREATE TABLE IF NOT EXISTS bitrix_eventos (
     duracion_en_stage_segs NUMERIC,               -- segundos en stage_anterior antes de esta transición
     duracion_formateada TEXT NOT NULL DEFAULT '',  -- "HH:MM:SS" para lectura directa
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Últimos mensajes por actor en el momento del cambio de stage
+    ultimo_mensaje_usuario  TEXT NOT NULL DEFAULT '',
+    fecha_ultimo_usuario    TIMESTAMPTZ,
+    ultimo_mensaje_bot      TEXT NOT NULL DEFAULT '',
+    fecha_ultimo_bot        TIMESTAMPTZ,
+    ultimo_mensaje_humano   TEXT NOT NULL DEFAULT '',
+    fecha_ultimo_humano     TIMESTAMPTZ,
     CONSTRAINT bitrix_eventos_uq UNIQUE (id_conversacion, message_id, tipo_actor)
 );
 
