@@ -335,11 +335,13 @@ _TIMELINE_INSERT = """
         fecha_rescate3,     duracion_rescate3_segs,
         fecha_won,          duracion_won_segs,
         fecha_lose,         duracion_lose_segs,
-        fecha_recuperacion, duracion_recuperacion_segs
+        fecha_recuperacion, duracion_recuperacion_segs,
+        empleado_id
     ) VALUES (
         $1, $2, $3,
         $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+        $24
     )
     ON CONFLICT (deal_id) DO UPDATE SET
         id_conversacion    = EXCLUDED.id_conversacion,
@@ -366,6 +368,8 @@ _TIMELINE_INSERT = """
         duracion_won_segs          = COALESCE(EXCLUDED.duracion_won_segs,          bitrix_deal_timeline.duracion_won_segs),
         duracion_lose_segs         = COALESCE(EXCLUDED.duracion_lose_segs,         bitrix_deal_timeline.duracion_lose_segs),
         duracion_recuperacion_segs = COALESCE(EXCLUDED.duracion_recuperacion_segs, bitrix_deal_timeline.duracion_recuperacion_segs),
+        -- empleado_id: siempre actualizar al asesor asignado más reciente
+        empleado_id = EXCLUDED.empleado_id,
         updated_at = NOW()
 """
 
@@ -378,6 +382,7 @@ async def upsert_deal_timeline(
     fecha_entrada: datetime,
     prev_stage: str,
     duracion_prev_segs: float | None,
+    empleado_id: str = "",
 ) -> None:
     """Upsert en bitrix_deal_timeline con el stage actual y duración del stage anterior.
 
@@ -404,6 +409,7 @@ async def upsert_deal_timeline(
     for c in _STAGE_COLS:
         values.append(fechas[c])
         values.append(duraciones[c])
+    values.append(empleado_id)
 
     try:
         async with get_connection() as conn:

@@ -257,8 +257,10 @@ CREATE TABLE IF NOT EXISTS bitrix_deal_timeline (
     -- C90:8 / C90:PREPAYMENT_INVOIC — Recuperación
     fecha_recuperacion          TIMESTAMPTZ,
     duracion_recuperacion_segs  NUMERIC,
+    empleado_id                 TEXT NOT NULL DEFAULT '',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+ALTER TABLE bitrix_deal_timeline ADD COLUMN IF NOT EXISTS empleado_id TEXT NOT NULL DEFAULT '';
 
 CREATE INDEX IF NOT EXISTS bitrix_deal_timeline_conv_idx  ON bitrix_deal_timeline(id_conversacion);
 CREATE INDEX IF NOT EXISTS bitrix_deal_timeline_tel_idx   ON bitrix_deal_timeline(telefono);

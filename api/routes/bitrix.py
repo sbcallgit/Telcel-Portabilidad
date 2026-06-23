@@ -316,6 +316,7 @@ async def bitrix_stage_event(request: Request) -> dict:
         fecha_entrada=now,
         prev_stage=prev_stage,
         duracion_prev_segs=duracion_segs,
+        empleado_id=empleado_id,
     ))
 
     return {"status": "ok", "deal_id": deal_id, "stage": stage_id, "duracion": duracion_fmt or None}
