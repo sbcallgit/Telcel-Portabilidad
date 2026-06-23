@@ -8,7 +8,7 @@ Ejemplo:
 
 Limpia:
   - Redis: todas las llaves relacionadas al teléfono
-  - PostgreSQL: checkpoints de LangGraph + fila en leads
+  - PostgreSQL: checkpoints de LangGraph + leads + bitrix_eventos + bitrix_deal_timeline
   - Bitrix: deals, contacto y sesión de Open Lines
 """
 
@@ -94,7 +94,6 @@ async def limpiar_postgres(phone: str) -> None:
     # Tablas dependientes de leads (foreign keys) y luego leads
     leads_total = 0
     for v in variantes:
-        # Obtener IDs para borrar registros dependientes primero
         lead_ids = await conn.fetch("SELECT id FROM leads WHERE telefono = $1", v)
         for row in lead_ids:
             lid = row["id"]
@@ -104,6 +103,23 @@ async def limpiar_postgres(phone: str) -> None:
         leads_total += int(n.split()[-1])
 
     log.info(f"PostgreSQL leads: {leads_total} filas eliminadas")
+
+    # Tablas de trazabilidad de eventos
+    ev_total = 0
+    tl_total = 0
+    for v in variantes:
+        n = await conn.execute(
+            "DELETE FROM bitrix_eventos WHERE id_conversacion = $1 OR telefono = $1", v
+        )
+        ev_total += int(n.split()[-1])
+        n = await conn.execute(
+            "DELETE FROM bitrix_deal_timeline WHERE id_conversacion = $1 OR telefono = $1", v
+        )
+        tl_total += int(n.split()[-1])
+
+    log.info(f"PostgreSQL bitrix_eventos: {ev_total} filas eliminadas")
+    log.info(f"PostgreSQL bitrix_deal_timeline: {tl_total} filas eliminadas")
+
     await conn.close()
 
 
