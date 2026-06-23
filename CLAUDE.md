@@ -13,6 +13,7 @@
 |---|---|---|
 | Manual imconnector / Open Lines | [`docs/manual_imconnector_whatsapp_bitrix.md`](docs/manual_imconnector_whatsapp_bitrix.md) | Guía completa de implementación del canal WhatsApp ↔ Bitrix24 vía imconnector: OAuth, registro del conector, flujo de mensajes de entrada/salida, polling del asesor, claves Redis y reglas críticas. Reutilizable para otras integraciones. |
 | Layout KPIs | [`docs/lay_out_ideal_kpis.md`](docs/lay_out_ideal_kpis.md) | Estructura ideal de la tabla `kpi_conversaciones` para reportes de BI. |
+| Guía Dashboard KPI | [`docs/dashboard_kpi_guia.md`](docs/dashboard_kpi_guia.md) | Explicación de cada sección, gráfica y tabla del dashboard: cómo leerlas, señales de alerta, casos de uso analítico y gráficas planeadas para próximas secciones. |
 | Prompt unificado | [`prompts/prompt_unificado.md`](prompts/prompt_unificado.md) | Todos los bloques del system prompt de Vera ensamblados en un solo documento. Útil para playground y auditorías. |
 | Especificación del bot | [`VERA_Bot_Specification.md`](VERA_Bot_Specification.md) | Especificación funcional completa de Vera. |
 
