@@ -660,7 +660,7 @@ async def get_funnel_data(
     desde: Optional[date] = Query(None),
     hasta: Optional[date] = Query(None),
 ) -> JSONResponse:
-    """Funnel de conversión desde bitrix_deal_timeline — cuántos deals llegaron a cada stage."""
+    """Funnel de conversión + transiciones recientes combinando bitrix_deal_timeline y bitrix_eventos."""
     from integrations.postgres import client as db
     from datetime import datetime, timezone as tz
 
@@ -669,6 +669,7 @@ async def get_funnel_data(
     hasta_ts = datetime(hasta.year, hasta.month, hasta.day, 23, 59, 59, tzinfo=tz.utc) if hasta \
         else datetime(2099, 12, 31, 23, 59, 59, tzinfo=tz.utc)
 
+    # ── Funnel + tiempos promedio desde bitrix_deal_timeline ──────────────────
     row = await db.fetchrow(
         """
         SELECT
@@ -680,23 +681,85 @@ async def get_funnel_data(
             COUNT(*) FILTER (WHERE fecha_rescate2 IS NOT NULL)     AS rescate2,
             COUNT(*) FILTER (WHERE fecha_rescate3 IS NOT NULL)     AS rescate3,
             COUNT(*) FILTER (WHERE fecha_won IS NOT NULL)          AS won,
-            COUNT(*) FILTER (WHERE fecha_lose IS NOT NULL)         AS lose
+            COUNT(*) FILTER (WHERE fecha_lose IS NOT NULL)         AS lose,
+            ROUND(AVG(duracion_new_segs)::numeric, 0)          AS avg_new,
+            ROUND(AVG(duracion_prospecto_segs)::numeric, 0)    AS avg_prospecto,
+            ROUND(AVG(duracion_escalamiento_segs)::numeric, 0) AS avg_escalamiento,
+            ROUND(AVG(duracion_seguimiento_segs)::numeric, 0)  AS avg_seguimiento,
+            ROUND(AVG(duracion_rescate1_segs)::numeric, 0)     AS avg_rescate1,
+            ROUND(AVG(duracion_rescate2_segs)::numeric, 0)     AS avg_rescate2,
+            ROUND(AVG(duracion_rescate3_segs)::numeric, 0)     AS avg_rescate3,
+            ROUND(AVG(duracion_won_segs)::numeric, 0)          AS avg_won,
+            ROUND(AVG(duracion_lose_segs)::numeric, 0)         AS avg_lose
         FROM bitrix_deal_timeline
         WHERE fecha_new >= $1 AND fecha_new <= $2
         """,
         desde_ts, hasta_ts,
     )
 
+    def _secs_to_str(secs) -> str:
+        if not secs:
+            return ""
+        s = int(secs)
+        if s < 60:
+            return f"{s}s"
+        if s < 3600:
+            return f"{s // 60}m {s % 60:02d}s"
+        return f"{s // 3600}h {(s % 3600) // 60:02d}m"
+
     r = dict(row) if row else {}
     stages = [
-        {"stage": "C90:NEW",        "label": "IA Porta",          "total": int(r.get("new", 0) or 0)},
-        {"stage": "C90:PROSPECTO",  "label": "Prospecto",         "total": int(r.get("prospecto", 0) or 0)},
-        {"stage": "C90:UC_8WB2DT",  "label": "Escalamiento",      "total": int(r.get("escalamiento", 0) or 0)},
-        {"stage": "C90:SEGUIMIENTO","label": "Seguimiento",        "total": int(r.get("seguimiento", 0) or 0)},
-        {"stage": "C90:1",          "label": "Rescate 1",         "total": int(r.get("rescate1", 0) or 0)},
-        {"stage": "C90:2",          "label": "Rescate 2",         "total": int(r.get("rescate2", 0) or 0)},
-        {"stage": "C90:3",          "label": "Rescate 3",         "total": int(r.get("rescate3", 0) or 0)},
-        {"stage": "C90:WON",        "label": "Venta",             "total": int(r.get("won", 0) or 0)},
-        {"stage": "C90:LOSE",       "label": "Caído",             "total": int(r.get("lose", 0) or 0)},
+        {"stage": "C90:NEW",         "label": "IA Porta",     "total": int(r.get("new", 0) or 0),         "avg_segs": float(r.get("avg_new") or 0),         "avg_fmt": _secs_to_str(r.get("avg_new"))},
+        {"stage": "C90:PROSPECTO",   "label": "Prospecto",    "total": int(r.get("prospecto", 0) or 0),   "avg_segs": float(r.get("avg_prospecto") or 0),   "avg_fmt": _secs_to_str(r.get("avg_prospecto"))},
+        {"stage": "C90:UC_8WB2DT",   "label": "Escalamiento", "total": int(r.get("escalamiento", 0) or 0),"avg_segs": float(r.get("avg_escalamiento") or 0),"avg_fmt": _secs_to_str(r.get("avg_escalamiento"))},
+        {"stage": "C90:SEGUIMIENTO", "label": "Seguimiento",  "total": int(r.get("seguimiento", 0) or 0), "avg_segs": float(r.get("avg_seguimiento") or 0), "avg_fmt": _secs_to_str(r.get("avg_seguimiento"))},
+        {"stage": "C90:1",           "label": "Rescate 1",    "total": int(r.get("rescate1", 0) or 0),    "avg_segs": float(r.get("avg_rescate1") or 0),    "avg_fmt": _secs_to_str(r.get("avg_rescate1"))},
+        {"stage": "C90:2",           "label": "Rescate 2",    "total": int(r.get("rescate2", 0) or 0),    "avg_segs": float(r.get("avg_rescate2") or 0),    "avg_fmt": _secs_to_str(r.get("avg_rescate2"))},
+        {"stage": "C90:3",           "label": "Rescate 3",    "total": int(r.get("rescate3", 0) or 0),    "avg_segs": float(r.get("avg_rescate3") or 0),    "avg_fmt": _secs_to_str(r.get("avg_rescate3"))},
+        {"stage": "C90:WON",         "label": "Venta",        "total": int(r.get("won", 0) or 0),         "avg_segs": float(r.get("avg_won") or 0),         "avg_fmt": _secs_to_str(r.get("avg_won"))},
+        {"stage": "C90:LOSE",        "label": "Caído",        "total": int(r.get("lose", 0) or 0),        "avg_segs": float(r.get("avg_lose") or 0),        "avg_fmt": _secs_to_str(r.get("avg_lose"))},
     ]
-    return JSONResponse({"stages": stages})
+
+    # ── Últimas transiciones de stage desde bitrix_eventos ────────────────────
+    eventos_rows = await db.fetch(
+        """
+        SELECT
+            be.id_conversacion,
+            be.deal_id,
+            be.telefono,
+            be.fecha_evento,
+            be.stage_anterior_nombre,
+            be.stage_nombre,
+            be.duracion_formateada,
+            be.ultimo_mensaje_usuario,
+            be.ultimo_mensaje_bot,
+            be.empleado_id,
+            bdt.empleado_id AS asesor_actual
+        FROM bitrix_eventos be
+        LEFT JOIN bitrix_deal_timeline bdt ON bdt.deal_id = be.deal_id
+        WHERE be.tipo_actor = 'sistema'
+          AND be.fecha_evento >= $1 AND be.fecha_evento <= $2
+          AND be.stage_nombre != ''
+        ORDER BY be.fecha_evento DESC
+        LIMIT 50
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    transiciones = [
+        {
+            "id_conversacion": r2["id_conversacion"],
+            "deal_id":         r2["deal_id"],
+            "telefono":        r2["telefono"] or "",
+            "fecha_evento":    r2["fecha_evento"].isoformat() if r2["fecha_evento"] else None,
+            "stage_anterior":  r2["stage_anterior_nombre"] or "",
+            "stage_nuevo":     r2["stage_nombre"] or "",
+            "duracion":        r2["duracion_formateada"] or "",
+            "ultimo_usuario":  (r2["ultimo_mensaje_usuario"] or "")[:120],
+            "ultimo_bot":      (r2["ultimo_mensaje_bot"] or "")[:120],
+            "empleado_id":     r2["asesor_actual"] or r2["empleado_id"] or "",
+        }
+        for r2 in eventos_rows
+    ]
+
+    return JSONResponse({"stages": stages, "transiciones": transiciones})

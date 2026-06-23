@@ -3,7 +3,7 @@ import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Chart, registerables } from 'chart.js';
-import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow, FunnelData } from '../../services/kpi.service';
+import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow, FunnelData, FunnelTransicion } from '../../services/kpi.service';
 import { AuthService } from '../../services/auth.service';
 
 Chart.register(...registerables);
@@ -81,6 +81,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   funnelData: FunnelData | null = null;
   funnelLoading = true;
   funnelError = '';
+  funnelTransiciones: FunnelTransicion[] = [];
 
   @ViewChild('funnelChart') funnelChartRef!: ElementRef<HTMLCanvasElement>;
   private funnelChart?: Chart;
@@ -173,6 +174,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.kpiSvc.getFunnelData(this.desde || undefined, this.hasta || undefined).subscribe({
       next: (data) => {
         this.funnelData = data;
+        this.funnelTransiciones = data.transiciones ?? [];
         this.funnelLoading = false;
         if (this.chartsReady) setTimeout(() => this.renderFunnelChart(), 0);
       },
@@ -217,7 +219,9 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
               label: (ctx) => {
                 const val = ctx.parsed.x ?? 0;
                 const pct = max > 0 ? ((val / max) * 100).toFixed(1) : '0';
-                return ` ${val} deals (${pct}%)`;
+                const stage = stages[ctx.dataIndex];
+                const avg = stage?.avg_fmt ? ` · prom. ${stage.avg_fmt}` : '';
+                return ` ${val} deals (${pct}%)${avg}`;
               },
             },
           },

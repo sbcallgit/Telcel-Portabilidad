@@ -146,10 +146,26 @@ export interface FunnelStage {
   stage: string;
   label: string;
   total: number;
+  avg_segs: number;
+  avg_fmt: string;
+}
+
+export interface FunnelTransicion {
+  id_conversacion: string;
+  deal_id: string;
+  telefono: string;
+  fecha_evento: string | null;
+  stage_anterior: string;
+  stage_nuevo: string;
+  duracion: string;
+  ultimo_usuario: string;
+  ultimo_bot: string;
+  empleado_id: string;
 }
 
 export interface FunnelData {
   stages: FunnelStage[];
+  transiciones: FunnelTransicion[];
 }
 
 export interface MegacableData {

@@ -95,14 +95,66 @@
         </div>
       </div>
 
-      <!-- Funnel de conversión -->
-      @if (!funnelLoading && !funnelError && funnelData) {
-        <div class="chart-card" style="margin-top:1.5rem">
-          <h3>Funnel de conversión</h3>
+      <!-- Funnel de conversión + tabla de transiciones -->
+      <div class="chart-card" style="margin-top:1.5rem" [style.display]="funnelData ? 'block' : 'none'">
+        <h3>Funnel de conversión</h3>
+        @if (funnelLoading) {
+          <div class="loading-state">Cargando funnel…</div>
+        } @else if (funnelError) {
+          <div class="error-state">{{ funnelError }}</div>
+        } @else {
           <div class="chart-wrap" style="height:280px">
             <canvas #funnelChart></canvas>
           </div>
-        </div>
+        }
+      </div>
+
+      @if (!funnelLoading && !funnelError && funnelData) {
+        <!-- Tabla de transiciones recientes -->
+        @if (funnelTransiciones.length > 0) {
+          <div class="table-card" style="margin-top:1.5rem">
+            <div class="table-header">
+              <h3 class="table-title">Transiciones de etapa recientes</h3>
+              <span class="table-count">{{ funnelTransiciones.length }} eventos</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Deal</th>
+                    <th>Teléfono</th>
+                    <th>Transición</th>
+                    <th>Duración en etapa</th>
+                    <th>Fecha</th>
+                    <th>Asesor</th>
+                    <th>Último mensaje cliente</th>
+                    <th>Última resp. Vera</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (t of funnelTransiciones; track t.deal_id + t.fecha_evento) {
+                    <tr>
+                      <td class="mono">{{ t.deal_id }}</td>
+                      <td class="mono">{{ t.telefono || '—' }}</td>
+                      <td>
+                        @if (t.stage_anterior) {
+                          <span class="badge" [attr.data-stage]="t.stage_anterior">{{ t.stage_anterior }}</span>
+                          <span style="margin:0 4px;color:#94a3b8">→</span>
+                        }
+                        <span class="badge" [attr.data-stage]="t.stage_nuevo">{{ t.stage_nuevo }}</span>
+                      </td>
+                      <td class="num">{{ t.duracion || '—' }}</td>
+                      <td class="date">{{ t.fecha_evento ? (t.fecha_evento | date:'dd/MM/yy HH:mm') : '—' }}</td>
+                      <td>{{ t.empleado_id || '—' }}</td>
+                      <td class="resumen-cell" [title]="t.ultimo_usuario">{{ t.ultimo_usuario || '—' }}</td>
+                      <td class="resumen-cell" [title]="t.ultimo_bot">{{ t.ultimo_bot || '—' }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+        }
       }
 
       <!-- Gráficas -->
