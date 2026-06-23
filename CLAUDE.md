@@ -671,8 +671,32 @@ Si `stage_id` no viene en el payload, el endpoint lo consulta directamente a Bit
 
 ### Módulo `jobs/kpi_eventos.py`
 
+- `upsert_deal_timeline(deal_id, id_conversacion, telefono, stage_id, fecha_entrada, prev_stage, duracion_prev_segs, empleado_id)` — llamado desde `bitrix_stage_event` como `asyncio.create_task` en cada webhook de cambio de stage. Upsert en `bitrix_deal_timeline`.
 - `upsert_eventos_from_bitrix()` — llamado desde `kpi_export._upsert()` para poblar mensajes e historial de stages con datos frescos de Bitrix.
 - `seed_from_kpi_conversaciones()` — migración inicial opcional, disparable via `POST /admin/bitrix-eventos-seed`.
+
+### Tabla pivote `bitrix_deal_timeline`
+
+Una fila por deal. Se popula automáticamente desde el webhook `POST /bitrix/stage-event` en cada cambio de stage. Complementa `bitrix_eventos` para análisis agregados de funnel y tiempos sin necesidad de agrupar la tabla de eventos.
+
+| Campo | Descripción |
+|---|---|
+| `deal_id` | PK — ID del deal en Bitrix |
+| `id_conversacion` | Thread del agente (teléfono o `tg_...`) |
+| `telefono` | Número del lead |
+| `fecha_{stage}` | Primera vez que el deal entró a cada stage (COALESCE preserva el valor original en upserts posteriores) |
+| `duracion_{stage}_segs` | Segundos que el deal pasó en ese stage antes de avanzar al siguiente (NUMERIC; vacío si el deal aún está en ese stage) |
+| `empleado_id` | ID del asesor asignado al deal — se actualiza en cada cambio de stage (siempre refleja el asesor más reciente) |
+| `updated_at` | Timestamp del último upsert |
+
+**Stages cubiertos:** `new`, `prospecto`, `escalamiento`, `seguimiento`, `rescate1`, `rescate2`, `rescate3`, `won`, `lose`, `recuperacion`.
+
+**Reglas de upsert:**
+- `fecha_*` — se preserva la primera entrada (COALESCE); si el deal regresa a un stage ya visitado, la fecha original no cambia.
+- `duracion_*` — se actualiza con el nuevo valor si llega uno (el deal puede re-entrar y recalcular).
+- `empleado_id` — siempre sobreescribe con el asesor asignado en el webhook más reciente.
+
+**Nota:** `empleado_id` solo se obtiene cuando el webhook no incluye `stage_id` directo y el endpoint llama a `crm.deal.get`. Si la regla de automatización en Bitrix envía `stage_id` en el payload, `empleado_id` puede quedar vacío — en ese caso se puede complementar con `bitrix_eventos.empleado_id` del evento `sistema` correspondiente.
 
 ### Consultas útiles
 
@@ -692,6 +716,34 @@ SELECT fecha_evento, tipo_actor, stage_nombre, stage_anterior_nombre, duracion_f
 FROM bitrix_eventos
 WHERE deal_id = '2302394'
 ORDER BY fecha_evento;
+
+-- Funnel de conversión por stage (tabla pivote)
+SELECT
+  COUNT(*) FILTER (WHERE fecha_new IS NOT NULL)          AS new,
+  COUNT(*) FILTER (WHERE fecha_prospecto IS NOT NULL)    AS prospecto,
+  COUNT(*) FILTER (WHERE fecha_escalamiento IS NOT NULL) AS escalamiento,
+  COUNT(*) FILTER (WHERE fecha_rescate1 IS NOT NULL)     AS rescate1,
+  COUNT(*) FILTER (WHERE fecha_rescate2 IS NOT NULL)     AS rescate2,
+  COUNT(*) FILTER (WHERE fecha_rescate3 IS NOT NULL)     AS rescate3,
+  COUNT(*) FILTER (WHERE fecha_won IS NOT NULL)          AS won,
+  COUNT(*) FILTER (WHERE fecha_lose IS NOT NULL)         AS lose
+FROM bitrix_deal_timeline;
+
+-- Tiempo promedio en cada stage (análisis de cuellos de botella)
+SELECT
+  AVG(duracion_new_segs) / 60          AS min_promedio_en_new,
+  AVG(duracion_prospecto_segs) / 60    AS min_promedio_en_prospecto,
+  AVG(duracion_escalamiento_segs) / 60 AS min_promedio_en_escalamiento
+FROM bitrix_deal_timeline;
+
+-- Análisis por asesor: deals cerrados y tiempo promedio hasta WON
+SELECT empleado_id,
+       COUNT(*) AS deals_won,
+       AVG(EXTRACT(EPOCH FROM (fecha_won - fecha_new))) / 60 AS min_promedio_cierre
+FROM bitrix_deal_timeline
+WHERE fecha_won IS NOT NULL
+GROUP BY empleado_id
+ORDER BY deals_won DESC;
 ```
 
 ---
