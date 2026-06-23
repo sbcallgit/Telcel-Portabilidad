@@ -5,6 +5,7 @@ import logging
 from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
+from agents.callbacks import TokenUsageCallback
 from agents.llm import get_llm
 from agents.portabilidad.context import (
     ASL_CATALOG,
@@ -168,7 +169,10 @@ async def _fin_node(state: PortabilidadState) -> dict:
         "Si el cliente decide portarse, dile que ya quedó registrado y un asesor lo contactará."
     )
 
-    ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-6:]))
+    ai_msg = await llm.ainvoke(
+        [SystemMessage(content=system)] + list(messages[-6:]),
+        config={"callbacks": [TokenUsageCallback(phone, "fin")]},
+    )
     return {"messages": split_msg(ai_msg.content)}
 
 

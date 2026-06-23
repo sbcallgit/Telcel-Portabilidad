@@ -4,6 +4,7 @@ import logging
 
 from langchain_core.messages import AIMessage, SystemMessage
 
+from agents.callbacks import TokenUsageCallback
 from agents.llm import get_llm
 from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import ANTI_RENDICION, FORMAT_RULES, HARD_RULES, OBJECTIONS_BANK, OBJECTIONS_HANDLING
@@ -180,7 +181,11 @@ async def objeciones_node(state: PortabilidadState) -> dict:
         FORMAT_RULES=FORMAT_RULES,
     )
 
-    ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-6:]))
+    _phone = state.get("customer_phone") or state.get("session_id") or ""
+    ai_msg = await llm.ainvoke(
+        [SystemMessage(content=system)] + list(messages[-6:]),
+        config={"callbacks": [TokenUsageCallback(_phone, "objeciones")]},
+    )
 
     return {
         "messages": split_msg(ai_msg.content),

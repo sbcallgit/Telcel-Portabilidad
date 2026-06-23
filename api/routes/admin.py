@@ -763,3 +763,126 @@ async def get_funnel_data(
     ]
 
     return JSONResponse({"stages": stages, "transiciones": transiciones})
+
+
+@router.get("/token-costs")
+async def get_token_costs(
+    desde: str | None = None,
+    hasta: str | None = None,
+    _: str = Depends(require_auth),
+) -> JSONResponse:
+    """Costo de tokens LLM por nodo, por día y por conversación."""
+    from datetime import datetime, timezone, timedelta
+    from integrations.postgres import client as db
+
+    if desde:
+        desde_ts = datetime.fromisoformat(desde).replace(tzinfo=timezone.utc)
+    else:
+        desde_ts = datetime.now(tz=timezone.utc) - timedelta(days=30)
+    if hasta:
+        hasta_ts = datetime.fromisoformat(hasta).replace(tzinfo=timezone.utc) + timedelta(days=1)
+    else:
+        hasta_ts = datetime.now(tz=timezone.utc) + timedelta(days=1)
+
+    # Resumen global
+    resumen = await db.fetchrow(
+        """
+        SELECT
+            COUNT(*)                          AS total_llamadas,
+            SUM(input_tokens)                 AS total_input,
+            SUM(output_tokens)                AS total_output,
+            SUM(input_tokens + output_tokens) AS total_tokens,
+            ROUND(SUM(cost_usd)::numeric, 6)  AS total_costo_usd
+        FROM token_usage
+        WHERE created_at >= $1 AND created_at <= $2
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    # Desglose por nodo
+    por_nodo = await db.fetch(
+        """
+        SELECT
+            node_name,
+            COUNT(*)                          AS llamadas,
+            SUM(input_tokens)                 AS input_tokens,
+            SUM(output_tokens)                AS output_tokens,
+            ROUND(SUM(cost_usd)::numeric, 6)  AS costo_usd
+        FROM token_usage
+        WHERE created_at >= $1 AND created_at <= $2
+        GROUP BY node_name
+        ORDER BY costo_usd DESC
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    # Costo acumulado por día
+    por_dia = await db.fetch(
+        """
+        SELECT
+            DATE(created_at AT TIME ZONE 'America/Monterrey') AS dia,
+            COUNT(*)                          AS llamadas,
+            SUM(input_tokens + output_tokens) AS tokens,
+            ROUND(SUM(cost_usd)::numeric, 6)  AS costo_usd
+        FROM token_usage
+        WHERE created_at >= $1 AND created_at <= $2
+        GROUP BY dia
+        ORDER BY dia DESC
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    # Top 10 conversaciones más costosas
+    top_threads = await db.fetch(
+        """
+        SELECT
+            thread_id,
+            COUNT(*)                          AS llamadas,
+            SUM(input_tokens + output_tokens) AS tokens,
+            ROUND(SUM(cost_usd)::numeric, 6)  AS costo_usd
+        FROM token_usage
+        WHERE created_at >= $1 AND created_at <= $2
+        GROUP BY thread_id
+        ORDER BY costo_usd DESC
+        LIMIT 10
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    return JSONResponse({
+        "resumen": {
+            "total_llamadas":  int(resumen["total_llamadas"] or 0),
+            "total_input":     int(resumen["total_input"] or 0),
+            "total_output":    int(resumen["total_output"] or 0),
+            "total_tokens":    int(resumen["total_tokens"] or 0),
+            "total_costo_usd": float(resumen["total_costo_usd"] or 0),
+        },
+        "por_nodo": [
+            {
+                "node_name":   r["node_name"],
+                "llamadas":    int(r["llamadas"]),
+                "input_tokens": int(r["input_tokens"]),
+                "output_tokens": int(r["output_tokens"]),
+                "costo_usd":   float(r["costo_usd"]),
+            }
+            for r in por_nodo
+        ],
+        "por_dia": [
+            {
+                "dia":      str(r["dia"]),
+                "llamadas": int(r["llamadas"]),
+                "tokens":   int(r["tokens"]),
+                "costo_usd": float(r["costo_usd"]),
+            }
+            for r in por_dia
+        ],
+        "top_threads": [
+            {
+                "thread_id": r["thread_id"],
+                "llamadas":  int(r["llamadas"]),
+                "tokens":    int(r["tokens"]),
+                "costo_usd": float(r["costo_usd"]),
+            }
+            for r in top_threads
+        ],
+    })

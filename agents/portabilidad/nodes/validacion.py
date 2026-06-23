@@ -5,6 +5,7 @@ import re
 
 from langchain_core.messages import AIMessage, SystemMessage
 
+from agents.callbacks import TokenUsageCallback
 from agents.llm import get_llm
 from agents.portabilidad.utils import render_prompt, split_msg
 from agents.portabilidad.context import (
@@ -368,7 +369,11 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
     if any(w in lower for w in _HORARIO_Q):
         llm = get_llm()
         system = render_prompt("horarios", PORTABILITY_SCHEDULE=PORTABILITY_SCHEDULE, FORMAT_RULES=FORMAT_RULES)
-        ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages[-4:]))
+        _phone = state.get("customer_phone") or state.get("session_id") or ""
+        ai_msg = await llm.ainvoke(
+            [SystemMessage(content=system)] + list(messages[-4:]),
+            config={"callbacks": [TokenUsageCallback(_phone, "validacion")]},
+        )
         return {"messages": split_msg(ai_msg.content)}
 
     # Pregunta sobre CAC por ciudad
@@ -595,7 +600,11 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
         instruction_saludo=instruction_saludo,
     )
 
-    ai_msg = await llm.ainvoke([SystemMessage(content=system)] + list(messages))
+    _phone = state.get("customer_phone") or state.get("session_id") or ""
+    ai_msg = await llm.ainvoke(
+        [SystemMessage(content=system)] + list(messages),
+        config={"callbacks": [TokenUsageCallback(_phone, "validacion")]},
+    )
     return {"messages": split_msg(ai_msg.content)}
 
 
