@@ -1,7 +1,7 @@
 # reset-test
 
 Limpia completamente el estado de un teléfono de prueba: Redis, checkpoints,
-leads, deals en Bitrix, contacto y sesión de Open Lines.
+leads, bitrix_eventos, bitrix_deal_timeline, deals en Bitrix, contacto y sesión de Open Lines.
 
 **Uso:** `/reset-test <telefono>`
 
@@ -26,9 +26,12 @@ El script limpia en este orden:
    `connector_session:*`, `connector_chat:*`, `connector_deal:*`,
    `connector_last_msg:*`, `bot_pausado:*`, `connector_delivered:*`
 
-2. **PostgreSQL** — borra checkpoints LangGraph (`checkpoints`, `checkpoint_blobs`,
-   `checkpoint_writes`) y la fila en `leads` para todas las variantes del teléfono
-   (con/sin prefijo 52, con/sin 1)
+2. **PostgreSQL** — borra en este orden para todas las variantes del teléfono
+   (con/sin prefijo 52, con/sin 1):
+   - Checkpoints LangGraph (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`)
+   - Fila en `leads` (con sus dependientes `seguimientos_log`, `seguimientos_fallidos`)
+   - Registros en `bitrix_eventos` (`id_conversacion` y `telefono`)
+   - Registros en `bitrix_deal_timeline` (`id_conversacion` y `telefono`)
 
 3. **Bitrix** — en este orden:
    - Busca el contacto por teléfono (`crm.duplicate.findbycomm`)
