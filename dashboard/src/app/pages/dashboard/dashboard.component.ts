@@ -3,7 +3,7 @@ import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Chart, registerables } from 'chart.js';
-import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow, FunnelData, FunnelTransicion } from '../../services/kpi.service';
+import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow, FunnelData, FunnelTransicion, CostoResultado } from '../../services/kpi.service';
 import { AuthService } from '../../services/auth.service';
 
 Chart.register(...registerables);
@@ -86,6 +86,12 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('funnelChart') funnelChartRef!: ElementRef<HTMLCanvasElement>;
   private funnelChart?: Chart;
 
+  costoData: CostoResultado[] = [];
+  costoLoading = true;
+  costoError = '';
+  @ViewChild('costoChart') costoChartRef!: ElementRef<HTMLCanvasElement>;
+  private costoChart?: Chart;
+
   @ViewChild('metaSpendChart') metaSpendChartRef!: ElementRef<HTMLCanvasElement>;
   private metaSpendChart?: Chart;
 
@@ -110,6 +116,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   ngOnInit(): void {
     this.load();
     this.loadFunnel();
+    this.loadCostoResultado();
     this.loadMeta();
     this.loadUtm();
     this.loadMegacable();
@@ -119,6 +126,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.chartsReady = true;
     if (this.resumen) this.renderCharts();
     if (this.funnelData) this.renderFunnelChart();
+    if (this.costoData.length) this.renderCostoChart();
     if (this.metaData) this.renderMetaChart();
     if (this.utmData) this.renderUtmChart();
     if (this.megacableData) this.renderMegacableCharts();
@@ -128,6 +136,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.stageChart?.destroy();
     this.msgChart?.destroy();
     this.funnelChart?.destroy();
+    this.costoChart?.destroy();
     this.metaSpendChart?.destroy();
     this.utmFuenteChart?.destroy();
     this.mgEstadoChart?.destroy();
@@ -236,6 +245,119 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
           y: {
             grid: { display: false },
             ticks: { font: { family: 'Inter', size: 12 } },
+          },
+        },
+      },
+    });
+  }
+
+  loadCostoResultado(): void {
+    this.costoLoading = true;
+    this.costoError = '';
+    this.kpiSvc.getCostoResultado(this.desde || undefined, this.hasta || undefined).subscribe({
+      next: (data) => {
+        this.costoData = data;
+        this.costoLoading = false;
+        if (this.chartsReady) setTimeout(() => this.renderCostoChart(), 0);
+      },
+      error: () => {
+        this.costoError = 'Error al cargar costos.';
+        this.costoLoading = false;
+      },
+    });
+  }
+
+  private renderCostoChart(): void {
+    if (!this.costoData.length || !this.costoChartRef) return;
+    this.costoChart?.destroy();
+
+    const labels  = this.costoData.map(r => r.stage_nombre);
+    const costos  = this.costoData.map(r => r.costo_promedio_usd);
+    const convs   = this.costoData.map(r => r.conversaciones);
+
+    const colorMap: Record<string, string> = {
+      'C90:WON':       '#10b981',
+      'C90:LOSE':      '#94a3b8',
+      'C90:NEW':       '#e8001d',
+      'C90:PROSPECTO': '#6366f1',
+    };
+    const barColors = this.costoData.map(r =>
+      colorMap[r.stage_id] ?? '#3b82f6'
+    );
+
+    this.costoChart = new Chart(this.costoChartRef.nativeElement, {
+      data: {
+        labels,
+        datasets: [
+          {
+            type: 'bar' as const,
+            label: 'Costo promedio (USD)',
+            data: costos,
+            backgroundColor: barColors,
+            borderRadius: 5,
+            yAxisID: 'yCosto',
+            order: 2,
+          },
+          {
+            type: 'line' as const,
+            label: 'Conversaciones',
+            data: convs,
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245,158,11,0.1)',
+            pointBackgroundColor: '#f59e0b',
+            tension: 0.3,
+            yAxisID: 'yConvs',
+            order: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { font: { family: 'Inter', size: 12 } } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                if (ctx.dataset.yAxisID === 'yCosto') {
+                  const r = this.costoData[ctx.dataIndex];
+                  return [
+                    ` Costo prom: $${(ctx.parsed.y ?? 0).toFixed(4)} USD`,
+                    ` Total: $${r.costo_total_usd.toFixed(4)} USD`,
+                    ` Tokens entrada prom: ${r.avg_tokens_entrada.toLocaleString()}`,
+                    ` Tokens salida prom: ${r.avg_tokens_salida.toLocaleString()}`,
+                    ` Msgs bot prom: ${r.avg_mensajes_bot}`,
+                  ];
+                }
+                return ` ${ctx.parsed.y} conversaciones`;
+              },
+            },
+          },
+        },
+        scales: {
+          yCosto: {
+            type: 'linear',
+            position: 'left',
+            beginAtZero: true,
+            title: { display: true, text: 'USD promedio', font: { family: 'Inter', size: 11 } },
+            grid: { color: '#f1f5f9' },
+            ticks: {
+              font: { family: 'Inter' },
+              callback: (v) => `$${Number(v).toFixed(4)}`,
+            },
+          },
+          yConvs: {
+            type: 'linear',
+            position: 'right',
+            beginAtZero: true,
+            title: { display: true, text: 'Conversaciones', font: { family: 'Inter', size: 11 } },
+            grid: { display: false },
+            ticks: { font: { family: 'Inter' } },
+          },
+          x: {
+            grid: { display: false },
+            ticks: { font: { family: 'Inter', size: 11 } },
           },
         },
       },
@@ -414,6 +536,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   applyFilter(): void {
     this.load(1);
     this.loadFunnel();
+    this.loadCostoResultado();
     this.loadMegacable();
   }
 
@@ -424,6 +547,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.search = '';
     this.load(1);
     this.loadFunnel();
+    this.loadCostoResultado();
     this.loadMegacable();
   }
 

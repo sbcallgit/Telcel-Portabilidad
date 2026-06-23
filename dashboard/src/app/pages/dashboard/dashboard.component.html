@@ -157,6 +157,51 @@
         }
       }
 
+      <!-- Costo LLM por resultado -->
+      <div class="chart-card" style="margin-top:1.5rem" [style.display]="costoData.length ? 'block' : 'none'">
+        <h3>Costo del bot por resultado de conversación</h3>
+        @if (costoLoading) {
+          <div class="loading-state">Cargando costos…</div>
+        } @else if (costoError) {
+          <div class="error-state">{{ costoError }}</div>
+        }
+        <div class="chart-wrap" style="height:280px">
+          <canvas #costoChart></canvas>
+        </div>
+        @if (!costoLoading && !costoError && costoData.length) {
+          <div class="table-card" style="margin-top:1rem;box-shadow:none;padding:0">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Resultado</th>
+                    <th style="text-align:right">Convs.</th>
+                    <th style="text-align:right">Costo prom. (USD)</th>
+                    <th style="text-align:right">Costo total (USD)</th>
+                    <th style="text-align:right">Tokens entrada</th>
+                    <th style="text-align:right">Tokens salida</th>
+                    <th style="text-align:right">Msgs bot prom.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (r of costoData; track r.stage_id) {
+                    <tr>
+                      <td><strong>{{ r.stage_nombre }}</strong></td>
+                      <td style="text-align:right">{{ r.conversaciones }}</td>
+                      <td style="text-align:right">${{ r.costo_promedio_usd.toFixed(4) }}</td>
+                      <td style="text-align:right">${{ r.costo_total_usd.toFixed(4) }}</td>
+                      <td style="text-align:right">{{ r.avg_tokens_entrada.toLocaleString() }}</td>
+                      <td style="text-align:right">{{ r.avg_tokens_salida.toLocaleString() }}</td>
+                      <td style="text-align:right">{{ r.avg_mensajes_bot }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+        }
+      </div>
+
       <!-- Gráficas -->
       <div class="charts-row">
         <div class="chart-card">

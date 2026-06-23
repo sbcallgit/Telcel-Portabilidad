@@ -865,7 +865,7 @@ async def get_token_costs(
             "total_tokens":    int(resumen["total_tokens"] or 0),
             "total_costo_usd": float(resumen["total_costo_usd"] or 0),
         },
-        "por_stage": [
+        "por_stage": [  # type: ignore[list-item]
             {
                 "stage":        r["stage"],
                 "llamadas":     int(r["llamadas"]),
@@ -894,3 +894,84 @@ async def get_token_costs(
             for r in top_threads
         ],
     })
+
+
+_STAGE_NOMBRES = {
+    "C90:NEW":              "IA Porta",
+    "C90:PROSPECTO":        "Prospecto",
+    "C90:UC_8WB2DT":        "Escalamiento",
+    "C90:SEGUIMIENTO":      "Seguimiento",
+    "C90:1":                "Rescate 1",
+    "C90:2":                "Rescate 2",
+    "C90:3":                "Rescate 3",
+    "C90:WON":              "Venta",
+    "C90:LOSE":             "Caído",
+    "C90:8":                "Recuperación",
+    "C90:PREPAYMENT_INVOIC": "Recuperación",
+}
+
+
+@router.get("/costo-resultado")
+async def get_costo_resultado(
+    desde: str | None = None,
+    hasta: str | None = None,
+    _: str = Depends(require_auth),
+) -> JSONResponse:
+    """Costo promedio del bot por resultado (stage final del deal)."""
+    from datetime import datetime, timezone, timedelta
+    from integrations.postgres import client as db
+
+    if desde:
+        desde_ts = datetime.fromisoformat(desde).replace(tzinfo=timezone.utc)
+    else:
+        desde_ts = datetime.now(tz=timezone.utc) - timedelta(days=30)
+    if hasta:
+        hasta_ts = datetime.fromisoformat(hasta).replace(tzinfo=timezone.utc) + timedelta(days=1)
+    else:
+        hasta_ts = datetime.now(tz=timezone.utc) + timedelta(days=1)
+
+    rows = await db.fetch(
+        """
+        WITH costos_por_conv AS (
+            SELECT
+                be.id_conversacion,
+                be.telefono,
+                SUM(be.costo_usd)        AS costo_total,
+                SUM(be.tokens_entrada)   AS tokens_entrada,
+                SUM(be.tokens_salida)    AS tokens_salida,
+                COUNT(*)                 AS mensajes_bot
+            FROM bitrix_eventos be
+            WHERE be.tipo_actor = 'bot'
+              AND be.costo_usd IS NOT NULL
+              AND be.fecha_evento >= $1 AND be.fecha_evento <= $2
+            GROUP BY be.id_conversacion, be.telefono
+        )
+        SELECT
+            COALESCE(l.bitrix_stage, 'Sin stage')      AS stage_id,
+            COUNT(*)                                    AS conversaciones,
+            ROUND(AVG(c.costo_total)::numeric, 6)       AS costo_promedio_usd,
+            ROUND(SUM(c.costo_total)::numeric, 6)       AS costo_total_usd,
+            ROUND(AVG(c.tokens_entrada)::numeric, 0)    AS avg_tokens_entrada,
+            ROUND(AVG(c.tokens_salida)::numeric, 0)     AS avg_tokens_salida,
+            ROUND(AVG(c.mensajes_bot)::numeric, 1)      AS avg_mensajes_bot
+        FROM costos_por_conv c
+        LEFT JOIN leads l ON l.telefono = c.telefono
+        GROUP BY stage_id
+        ORDER BY costo_promedio_usd DESC
+        """,
+        desde_ts, hasta_ts,
+    )
+
+    return JSONResponse([
+        {
+            "stage_id":          r["stage_id"],
+            "stage_nombre":      _STAGE_NOMBRES.get(r["stage_id"], r["stage_id"]),
+            "conversaciones":    int(r["conversaciones"]),
+            "costo_promedio_usd": float(r["costo_promedio_usd"] or 0),
+            "costo_total_usd":   float(r["costo_total_usd"] or 0),
+            "avg_tokens_entrada": int(r["avg_tokens_entrada"] or 0),
+            "avg_tokens_salida":  int(r["avg_tokens_salida"] or 0),
+            "avg_mensajes_bot":   float(r["avg_mensajes_bot"] or 0),
+        }
+        for r in rows
+    ])
