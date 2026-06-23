@@ -114,6 +114,93 @@ Duración: 3m 37s
 
 ---
 
+### Gráfica: Costo del bot por resultado de conversación
+
+**Fuente:** tabla `bitrix_eventos` — filas `tipo_actor = 'bot'` con `costo_usd IS NOT NULL`.  
+**Disponible desde:** junio 2026 (fecha de activación del tracking de tokens).  
+**Tipo:** barras + línea con dos ejes Y.
+
+#### Qué mide
+
+Para cada etapa activa en el momento en que el bot respondió, agrupa el costo en USD de todas las llamadas al LLM. Permite responder: **¿cuánto gasta el bot en cada etapa del funnel?**
+
+- **Barras** (eje izquierdo) — costo promedio por mensaje del bot en esa etapa, en USD.
+- **Línea amarilla** (eje derecho) — número de conversaciones distintas que tuvieron actividad del bot en esa etapa.
+
+#### Colores de las barras
+
+| Color | Etapa |
+|---|---|
+| Rojo | IA Porta (`C90:NEW`) |
+| Morado | Prospecto |
+| Verde | Venta (`C90:WON`) |
+| Gris | Caído |
+| Azul | Resto de etapas |
+
+#### Tooltip al pasar el mouse
+
+Al pasar sobre una barra aparece el detalle completo de esa etapa:
+
+```
+Costo prom: $0.0114 USD
+Total: $0.2274 USD
+Tokens entrada prom: 3,146
+Tokens salida prom: 129
+Msgs bot: 20
+```
+
+#### Tablas debajo de la gráfica
+
+**Resumen por etapa** — una fila por etapa, con totales y promedios:
+
+| Columna | Descripción |
+|---|---|
+| **Etapa** | Stage activo cuando el bot respondió |
+| **Convs.** | Conversaciones distintas con actividad del bot en esa etapa |
+| **Msgs bot** | Total de mensajes que el bot generó en esa etapa |
+| **Costo prom. (USD)** | Promedio por mensaje del bot |
+| **Costo total (USD)** | Suma de todos los mensajes del bot en esa etapa |
+| **Tokens entrada** | Promedio de tokens enviados al LLM (system prompt + historial) |
+| **Tokens salida** | Promedio de tokens generados por el LLM |
+
+**Detalle por conversación** — una fila por conversación/etapa, con deal ID:
+
+| Columna | Descripción |
+|---|---|
+| **Deal ID** | ID del deal en Bitrix. Usar para buscar el historial completo |
+| **Conversación** | `id_conversacion` — teléfono del lead o `tg_...` para Telegram |
+| **Etapa** | Stage que tenía el deal cuando el bot respondió |
+| **Msgs bot** | Mensajes que generó el bot en esa etapa para esa conversación |
+| **Costo total (USD)** | Total gastado por el bot en esa conversación/etapa |
+| **Tokens entrada / salida** | Acumulado de tokens para esa conversación/etapa |
+
+#### Cómo interpretar los datos
+
+**Etapa IA Porta (C90:NEW):**  
+El bot está en modo exploración — valida LADA, sondea necesidades y presenta la oferta. Costo bajo es normal (pocas respuestas antes de avanzar).
+
+**Etapas Rescate 1/2/3:**  
+El bot generó mensajes de seguimiento personalizados con historial. Si el costo es similar a IA Porta, el LLM está leyendo todo el historial de la conversación (correcto).
+
+**Etapa Venta (C90:WON):**  
+Conversaciones donde el bot estuvo activo hasta el cierre. Costo más alto = conversaciones más largas = leads más complicados que el bot acompañó todo el camino.
+
+#### Señales de alerta
+
+- **Costo en Rescate 2/3 > costo en Prospecto** — el bot está gastando más tokens en leads fríos que en leads que convierten. Revisar si los mensajes de rescate son demasiado largos.
+- **Tokens entrada muy altos (> 8,000)** en etapas tempranas — el historial de conversación es muy extenso; considerar acortar la ventana de contexto en los nodos.
+- **Muchas conversaciones en "Sin stage"** — hay mensajes del bot sin `stage_id` asignado, probablemente de conversaciones antes de que se activara el webhook de Bitrix. Normal en datos históricos.
+
+#### Precios del LLM (OpenRouter — junio 2026)
+
+| Modelo | Precio entrada | Precio salida |
+|---|---|---|
+| `anthropic/claude-sonnet-4-5` | $3.00 / 1M tokens | $15.00 / 1M tokens |
+
+Estos precios están hardcodeados en `agents/callbacks.py`. Actualizar si cambian las tarifas de OpenRouter.
+
+---
+
 ## Sección: Meta Ads — Portabilidad 2 Callcom
 
 > **Próximamente — en desarrollo**
