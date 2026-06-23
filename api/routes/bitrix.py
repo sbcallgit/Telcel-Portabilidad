@@ -304,4 +304,18 @@ async def bitrix_stage_event(request: Request) -> dict:
             "duracion_formateada": duracion_fmt or "—",
         },
     )
+
+    # Actualizar timeline pivoteado por deal
+    from jobs.kpi_eventos import upsert_deal_timeline
+    import asyncio as _asyncio
+    _asyncio.create_task(upsert_deal_timeline(
+        deal_id=deal_id,
+        id_conversacion=id_conversacion,
+        telefono=phone,
+        stage_id=stage_id,
+        fecha_entrada=now,
+        prev_stage=prev_stage,
+        duracion_prev_segs=duracion_segs,
+    ))
+
     return {"status": "ok", "deal_id": deal_id, "stage": stage_id, "duracion": duracion_fmt or None}

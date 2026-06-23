@@ -221,6 +221,48 @@ ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS canal           TEXT NOT NUL
 ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS wa_message_id   TEXT NOT NULL DEFAULT '';
 ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS autor_bitrix_id TEXT NOT NULL DEFAULT '';
 
+-- Timeline pivoteado por deal: una fila por deal, una columna por stage
+-- Permite ver el journey completo del deal en una sola fila para BI
+CREATE TABLE IF NOT EXISTS bitrix_deal_timeline (
+    deal_id             TEXT PRIMARY KEY,
+    id_conversacion     TEXT NOT NULL DEFAULT '',
+    telefono            TEXT NOT NULL DEFAULT '',
+    -- C90:NEW — Lead Nuevo / IA Porta
+    fecha_new                   TIMESTAMPTZ,
+    duracion_new_segs           NUMERIC,
+    -- C90:PROSPECTO — Prospecto
+    fecha_prospecto             TIMESTAMPTZ,
+    duracion_prospecto_segs     NUMERIC,
+    -- C90:UC_8WB2DT — Escalamiento Humano
+    fecha_escalamiento          TIMESTAMPTZ,
+    duracion_escalamiento_segs  NUMERIC,
+    -- C90:SEGUIMIENTO — Seguimiento
+    fecha_seguimiento           TIMESTAMPTZ,
+    duracion_seguimiento_segs   NUMERIC,
+    -- C90:1 — Rescate 1
+    fecha_rescate1              TIMESTAMPTZ,
+    duracion_rescate1_segs      NUMERIC,
+    -- C90:2 — Rescate 2
+    fecha_rescate2              TIMESTAMPTZ,
+    duracion_rescate2_segs      NUMERIC,
+    -- C90:3 — Rescate 3 (Vicidial)
+    fecha_rescate3              TIMESTAMPTZ,
+    duracion_rescate3_segs      NUMERIC,
+    -- C90:WON — Venta
+    fecha_won                   TIMESTAMPTZ,
+    duracion_won_segs           NUMERIC,
+    -- C90:LOSE — Caído
+    fecha_lose                  TIMESTAMPTZ,
+    duracion_lose_segs          NUMERIC,
+    -- C90:8 / C90:PREPAYMENT_INVOIC — Recuperación
+    fecha_recuperacion          TIMESTAMPTZ,
+    duracion_recuperacion_segs  NUMERIC,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS bitrix_deal_timeline_conv_idx  ON bitrix_deal_timeline(id_conversacion);
+CREATE INDEX IF NOT EXISTS bitrix_deal_timeline_tel_idx   ON bitrix_deal_timeline(telefono);
+
 -- Usuarios del dashboard KPI
 CREATE TABLE IF NOT EXISTS dashboard_users (
     id SERIAL PRIMARY KEY,

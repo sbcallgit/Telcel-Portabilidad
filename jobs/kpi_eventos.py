@@ -21,6 +21,23 @@ from integrations.postgres.client import get_connection
 
 logger = logging.getLogger(__name__)
 
+_STAGE_COLUMN: dict[str, str] = {
+    "C90:NEW":               "new",
+    "C90:PROSPECTO":         "prospecto",
+    "C90:UC_8WB2DT":         "escalamiento",
+    "C90:SEGUIMIENTO":       "seguimiento",
+    "C90:1":                 "rescate1",
+    "C90:2":                 "rescate2",
+    "C90:3":                 "rescate3",
+    "C90:WON":               "won",
+    "C90:LOSE":              "lose",
+    "C90:8":                 "recuperacion",
+    "C90:PREPAYMENT_INVOIC": "recuperacion",
+}
+
+_STAGE_COLS = ["new", "prospecto", "escalamiento", "seguimiento",
+               "rescate1", "rescate2", "rescate3", "won", "lose", "recuperacion"]
+
 _STAGE_NOMBRES: dict[str, str] = {
     "C90:NEW":         "Lead Nuevo / IA Porta",
     "C90:PROSPECTO":   "Prospecto",
@@ -304,6 +321,99 @@ async def _fetch_bitrix_data(
             logger.warning("bitrix_eventos_history_error", extra={"deal_id": deal_id, "error": str(exc)})
 
     return bitrix_conversation_id, chat_id, raw_messages, raw_history
+
+
+_TIMELINE_INSERT = """
+    INSERT INTO bitrix_deal_timeline (
+        deal_id, id_conversacion, telefono,
+        fecha_new,          duracion_new_segs,
+        fecha_prospecto,    duracion_prospecto_segs,
+        fecha_escalamiento, duracion_escalamiento_segs,
+        fecha_seguimiento,  duracion_seguimiento_segs,
+        fecha_rescate1,     duracion_rescate1_segs,
+        fecha_rescate2,     duracion_rescate2_segs,
+        fecha_rescate3,     duracion_rescate3_segs,
+        fecha_won,          duracion_won_segs,
+        fecha_lose,         duracion_lose_segs,
+        fecha_recuperacion, duracion_recuperacion_segs
+    ) VALUES (
+        $1, $2, $3,
+        $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+    )
+    ON CONFLICT (deal_id) DO UPDATE SET
+        id_conversacion    = EXCLUDED.id_conversacion,
+        telefono           = EXCLUDED.telefono,
+        -- fecha_*: preservar la primera vez que el deal entró a cada stage
+        fecha_new          = COALESCE(bitrix_deal_timeline.fecha_new,          EXCLUDED.fecha_new),
+        fecha_prospecto    = COALESCE(bitrix_deal_timeline.fecha_prospecto,    EXCLUDED.fecha_prospecto),
+        fecha_escalamiento = COALESCE(bitrix_deal_timeline.fecha_escalamiento, EXCLUDED.fecha_escalamiento),
+        fecha_seguimiento  = COALESCE(bitrix_deal_timeline.fecha_seguimiento,  EXCLUDED.fecha_seguimiento),
+        fecha_rescate1     = COALESCE(bitrix_deal_timeline.fecha_rescate1,     EXCLUDED.fecha_rescate1),
+        fecha_rescate2     = COALESCE(bitrix_deal_timeline.fecha_rescate2,     EXCLUDED.fecha_rescate2),
+        fecha_rescate3     = COALESCE(bitrix_deal_timeline.fecha_rescate3,     EXCLUDED.fecha_rescate3),
+        fecha_won          = COALESCE(bitrix_deal_timeline.fecha_won,          EXCLUDED.fecha_won),
+        fecha_lose         = COALESCE(bitrix_deal_timeline.fecha_lose,         EXCLUDED.fecha_lose),
+        fecha_recuperacion = COALESCE(bitrix_deal_timeline.fecha_recuperacion, EXCLUDED.fecha_recuperacion),
+        -- duracion_*: tomar el nuevo valor si llega (puede actualizarse si el deal re-entra)
+        duracion_new_segs          = COALESCE(EXCLUDED.duracion_new_segs,          bitrix_deal_timeline.duracion_new_segs),
+        duracion_prospecto_segs    = COALESCE(EXCLUDED.duracion_prospecto_segs,    bitrix_deal_timeline.duracion_prospecto_segs),
+        duracion_escalamiento_segs = COALESCE(EXCLUDED.duracion_escalamiento_segs, bitrix_deal_timeline.duracion_escalamiento_segs),
+        duracion_seguimiento_segs  = COALESCE(EXCLUDED.duracion_seguimiento_segs,  bitrix_deal_timeline.duracion_seguimiento_segs),
+        duracion_rescate1_segs     = COALESCE(EXCLUDED.duracion_rescate1_segs,     bitrix_deal_timeline.duracion_rescate1_segs),
+        duracion_rescate2_segs     = COALESCE(EXCLUDED.duracion_rescate2_segs,     bitrix_deal_timeline.duracion_rescate2_segs),
+        duracion_rescate3_segs     = COALESCE(EXCLUDED.duracion_rescate3_segs,     bitrix_deal_timeline.duracion_rescate3_segs),
+        duracion_won_segs          = COALESCE(EXCLUDED.duracion_won_segs,          bitrix_deal_timeline.duracion_won_segs),
+        duracion_lose_segs         = COALESCE(EXCLUDED.duracion_lose_segs,         bitrix_deal_timeline.duracion_lose_segs),
+        duracion_recuperacion_segs = COALESCE(EXCLUDED.duracion_recuperacion_segs, bitrix_deal_timeline.duracion_recuperacion_segs),
+        updated_at = NOW()
+"""
+
+
+async def upsert_deal_timeline(
+    deal_id: str,
+    id_conversacion: str,
+    telefono: str,
+    stage_id: str,
+    fecha_entrada: datetime,
+    prev_stage: str,
+    duracion_prev_segs: float | None,
+) -> None:
+    """Upsert en bitrix_deal_timeline con el stage actual y duración del stage anterior.
+
+    Llamado desde el webhook stage-event en cada cambio de etapa.
+    - fecha_{stage}: primera vez que el deal entró a ese stage (preservada con COALESCE)
+    - duracion_{prev_stage}_segs: tiempo que pasó en el stage anterior antes de esta transición
+    """
+    if not deal_id:
+        return
+
+    # Inicializar todos los valores de fecha y duración a None
+    fechas: dict[str, datetime | None] = {c: None for c in _STAGE_COLS}
+    duraciones: dict[str, float | None] = {c: None for c in _STAGE_COLS}
+
+    col = _STAGE_COLUMN.get(stage_id)
+    if col:
+        fechas[col] = fecha_entrada
+
+    prev_col = _STAGE_COLUMN.get(prev_stage) if prev_stage else None
+    if prev_col and duracion_prev_segs is not None:
+        duraciones[prev_col] = duracion_prev_segs
+
+    values: list = [deal_id, id_conversacion, telefono]
+    for c in _STAGE_COLS:
+        values.append(fechas[c])
+        values.append(duraciones[c])
+
+    try:
+        async with get_connection() as conn:
+            await conn.execute(_TIMELINE_INSERT, *values)
+        logger.info(
+            "deal_timeline_upserted",
+            extra={"deal_id": deal_id, "stage_id": stage_id, "prev_stage": prev_stage},
+        )
+    except Exception as exc:
+        logger.warning("deal_timeline_error", extra={"deal_id": deal_id, "error": str(exc)})
 
 
 async def log_mensaje_evento(
