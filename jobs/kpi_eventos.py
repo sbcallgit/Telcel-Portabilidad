@@ -434,10 +434,15 @@ async def log_mensaje_evento(
 
     Llamar con asyncio.create_task() para no bloquear el path crítico.
 
+    Para mensajes de bot lee la clave Redis `token_pending:{phone}` que
+    TokenUsageCallback depositó justo antes, guardando tokens_entrada,
+    tokens_salida y costo_usd directamente en la fila.
+
     message_id: WA message ID para usuario, ID sintético "bot_{phone}_{ts}" para bot,
                 ID entero de Bitrix para mensajes del asesor humano.
     wa_message_id: igual a message_id para usuario/bot; vacío para humano.
     """
+    import json as _json
     from integrations.redis_client import get_redis
 
     try:
@@ -468,9 +473,23 @@ async def log_mensaje_evento(
             stage_id = "C90:NEW"
 
         stage_nombre = _STAGE_NOMBRES.get(stage_id, stage_id)
-
         canal = "telegram" if phone.startswith("tg_") else "whatsapp"
         now = datetime.now(timezone.utc)
+
+        # Tokens: solo para mensajes del bot — leer y consumir la clave Redis
+        tokens_entrada: int | None = None
+        tokens_salida:  int | None = None
+        costo_usd: float | None = None
+        if tipo_actor == "bot":
+            raw = await redis.getdel(f"token_pending:{phone}")
+            if raw:
+                try:
+                    td = _json.loads(raw)
+                    tokens_entrada = td.get("input_tokens")
+                    tokens_salida  = td.get("output_tokens")
+                    costo_usd      = td.get("cost_usd")
+                except Exception:
+                    pass
 
         await db.execute(
             """
@@ -480,8 +499,9 @@ async def log_mensaje_evento(
                 stage_id, stage_nombre, empleado_id,
                 stage_anterior, stage_anterior_nombre,
                 duracion_en_stage_segs, duracion_formateada,
-                canal, wa_message_id, autor_bitrix_id
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+                canal, wa_message_id, autor_bitrix_id,
+                tokens_entrada, tokens_salida, costo_usd
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
             ON CONFLICT (id_conversacion, message_id, tipo_actor) DO UPDATE SET
                 texto           = EXCLUDED.texto,
                 stage_id        = EXCLUDED.stage_id,
@@ -489,13 +509,17 @@ async def log_mensaje_evento(
                 deal_id         = CASE WHEN EXCLUDED.deal_id <> '' THEN EXCLUDED.deal_id
                                        ELSE bitrix_eventos.deal_id END,
                 wa_message_id   = CASE WHEN EXCLUDED.wa_message_id <> '' THEN EXCLUDED.wa_message_id
-                                       ELSE bitrix_eventos.wa_message_id END
+                                       ELSE bitrix_eventos.wa_message_id END,
+                tokens_entrada  = COALESCE(EXCLUDED.tokens_entrada, bitrix_eventos.tokens_entrada),
+                tokens_salida   = COALESCE(EXCLUDED.tokens_salida,  bitrix_eventos.tokens_salida),
+                costo_usd       = COALESCE(EXCLUDED.costo_usd,      bitrix_eventos.costo_usd)
             """,
             phone, deal_id, chat_id, bitrix_conversation_id, phone,
             message_id, now, tipo_actor, text,
             stage_id, stage_nombre, "",
             "", "", None, "",
             canal, wa_message_id, autor_bitrix_id,
+            tokens_entrada, tokens_salida, costo_usd,
         )
     except Exception as exc:
         logger.warning(

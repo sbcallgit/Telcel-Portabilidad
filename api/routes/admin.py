@@ -784,33 +784,37 @@ async def get_token_costs(
     else:
         hasta_ts = datetime.now(tz=timezone.utc) + timedelta(days=1)
 
-    # Resumen global
+    # Resumen global — lee de bitrix_eventos filas tipo 'bot' con tokens capturados
     resumen = await db.fetchrow(
         """
         SELECT
-            COUNT(*)                          AS total_llamadas,
-            SUM(input_tokens)                 AS total_input,
-            SUM(output_tokens)                AS total_output,
-            SUM(input_tokens + output_tokens) AS total_tokens,
-            ROUND(SUM(cost_usd)::numeric, 6)  AS total_costo_usd
-        FROM token_usage
-        WHERE created_at >= $1 AND created_at <= $2
+            COUNT(*)                                    AS total_llamadas,
+            SUM(tokens_entrada)                         AS total_input,
+            SUM(tokens_salida)                          AS total_output,
+            SUM(COALESCE(tokens_entrada,0) + COALESCE(tokens_salida,0)) AS total_tokens,
+            ROUND(SUM(costo_usd)::numeric, 6)           AS total_costo_usd
+        FROM bitrix_eventos
+        WHERE tipo_actor = 'bot'
+          AND tokens_entrada IS NOT NULL
+          AND fecha_evento >= $1 AND fecha_evento <= $2
         """,
         desde_ts, hasta_ts,
     )
 
-    # Desglose por nodo
-    por_nodo = await db.fetch(
+    # Desglose por stage (equivale al "nodo" más cercano que podemos inferir)
+    por_stage = await db.fetch(
         """
         SELECT
-            node_name,
-            COUNT(*)                          AS llamadas,
-            SUM(input_tokens)                 AS input_tokens,
-            SUM(output_tokens)                AS output_tokens,
-            ROUND(SUM(cost_usd)::numeric, 6)  AS costo_usd
-        FROM token_usage
-        WHERE created_at >= $1 AND created_at <= $2
-        GROUP BY node_name
+            stage_nombre                                AS stage,
+            COUNT(*)                                    AS llamadas,
+            SUM(tokens_entrada)                         AS input_tokens,
+            SUM(tokens_salida)                          AS output_tokens,
+            ROUND(SUM(costo_usd)::numeric, 6)           AS costo_usd
+        FROM bitrix_eventos
+        WHERE tipo_actor = 'bot'
+          AND tokens_entrada IS NOT NULL
+          AND fecha_evento >= $1 AND fecha_evento <= $2
+        GROUP BY stage_nombre
         ORDER BY costo_usd DESC
         """,
         desde_ts, hasta_ts,
@@ -820,12 +824,14 @@ async def get_token_costs(
     por_dia = await db.fetch(
         """
         SELECT
-            DATE(created_at AT TIME ZONE 'America/Monterrey') AS dia,
-            COUNT(*)                          AS llamadas,
-            SUM(input_tokens + output_tokens) AS tokens,
-            ROUND(SUM(cost_usd)::numeric, 6)  AS costo_usd
-        FROM token_usage
-        WHERE created_at >= $1 AND created_at <= $2
+            DATE(fecha_evento AT TIME ZONE 'America/Monterrey') AS dia,
+            COUNT(*)                                             AS llamadas,
+            SUM(COALESCE(tokens_entrada,0) + COALESCE(tokens_salida,0)) AS tokens,
+            ROUND(SUM(costo_usd)::numeric, 6)                   AS costo_usd
+        FROM bitrix_eventos
+        WHERE tipo_actor = 'bot'
+          AND tokens_entrada IS NOT NULL
+          AND fecha_evento >= $1 AND fecha_evento <= $2
         GROUP BY dia
         ORDER BY dia DESC
         """,
@@ -836,13 +842,15 @@ async def get_token_costs(
     top_threads = await db.fetch(
         """
         SELECT
-            thread_id,
-            COUNT(*)                          AS llamadas,
-            SUM(input_tokens + output_tokens) AS tokens,
-            ROUND(SUM(cost_usd)::numeric, 6)  AS costo_usd
-        FROM token_usage
-        WHERE created_at >= $1 AND created_at <= $2
-        GROUP BY thread_id
+            id_conversacion                             AS thread_id,
+            COUNT(*)                                    AS llamadas,
+            SUM(COALESCE(tokens_entrada,0) + COALESCE(tokens_salida,0)) AS tokens,
+            ROUND(SUM(costo_usd)::numeric, 6)           AS costo_usd
+        FROM bitrix_eventos
+        WHERE tipo_actor = 'bot'
+          AND tokens_entrada IS NOT NULL
+          AND fecha_evento >= $1 AND fecha_evento <= $2
+        GROUP BY id_conversacion
         ORDER BY costo_usd DESC
         LIMIT 10
         """,
@@ -857,15 +865,15 @@ async def get_token_costs(
             "total_tokens":    int(resumen["total_tokens"] or 0),
             "total_costo_usd": float(resumen["total_costo_usd"] or 0),
         },
-        "por_nodo": [
+        "por_stage": [
             {
-                "node_name":   r["node_name"],
-                "llamadas":    int(r["llamadas"]),
-                "input_tokens": int(r["input_tokens"]),
-                "output_tokens": int(r["output_tokens"]),
-                "costo_usd":   float(r["costo_usd"]),
+                "stage":        r["stage"],
+                "llamadas":     int(r["llamadas"]),
+                "input_tokens":  int(r["input_tokens"] or 0),
+                "output_tokens": int(r["output_tokens"] or 0),
+                "costo_usd":    float(r["costo_usd"] or 0),
             }
-            for r in por_nodo
+            for r in por_stage
         ],
         "por_dia": [
             {

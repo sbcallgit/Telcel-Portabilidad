@@ -220,6 +220,9 @@ CREATE INDEX IF NOT EXISTS bitrix_eventos_stage_idx  ON bitrix_eventos(stage_id)
 ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS canal           TEXT NOT NULL DEFAULT '';
 ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS wa_message_id   TEXT NOT NULL DEFAULT '';
 ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS autor_bitrix_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS tokens_entrada  INTEGER;
+ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS tokens_salida   INTEGER;
+ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS costo_usd       NUMERIC(12, 8);
 
 -- Timeline pivoteado por deal: una fila por deal, una columna por stage
 -- Permite ver el journey completo del deal en una sola fila para BI
@@ -264,20 +267,6 @@ ALTER TABLE bitrix_deal_timeline ADD COLUMN IF NOT EXISTS empleado_id TEXT NOT N
 
 CREATE INDEX IF NOT EXISTS bitrix_deal_timeline_conv_idx  ON bitrix_deal_timeline(id_conversacion);
 CREATE INDEX IF NOT EXISTS bitrix_deal_timeline_tel_idx   ON bitrix_deal_timeline(telefono);
-
--- Uso de tokens por llamada al LLM
-CREATE TABLE IF NOT EXISTS token_usage (
-    id           SERIAL PRIMARY KEY,
-    thread_id    TEXT NOT NULL DEFAULT '',
-    node_name    TEXT NOT NULL DEFAULT '',
-    model        TEXT NOT NULL DEFAULT '',
-    input_tokens  INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cost_usd     NUMERIC(12, 8) NOT NULL DEFAULT 0,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS token_usage_thread_idx ON token_usage(thread_id);
-CREATE INDEX IF NOT EXISTS token_usage_created_idx ON token_usage(created_at);
 
 -- Usuarios del dashboard KPI
 CREATE TABLE IF NOT EXISTS dashboard_users (
