@@ -162,6 +162,21 @@ async def trigger_kpi_export(_: AuthDep) -> JSONResponse:
     return JSONResponse({"status": "started", "message": "KPI export corriendo en background — revisa logs para progreso"})
 
 
+@router.post("/bitrix-eventos-seed")
+async def trigger_bitrix_eventos_seed(_: AuthDep) -> JSONResponse:
+    """Pobla bitrix_eventos desde kpi_conversaciones existente (migración inicial).
+
+    Seguro re-ejecutar — usa ON CONFLICT DO NOTHING.
+    Para datos nuevos el job nocturno kpi_export los agrega automáticamente.
+    """
+    from jobs.kpi_eventos import seed_from_kpi_conversaciones
+
+    logger.info("admin_bitrix_eventos_seed_triggered")
+    asyncio.create_task(seed_from_kpi_conversaciones())
+
+    return JSONResponse({"status": "started", "message": "Seed de bitrix_eventos corriendo en background — revisa logs para progreso"})
+
+
 @router.post("/kpi-email")
 async def trigger_kpi_email(_: AuthDep) -> JSONResponse:
     """Dispara el envío del reporte KPI por correo de forma inmediata."""

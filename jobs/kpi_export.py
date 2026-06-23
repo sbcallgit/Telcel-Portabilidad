@@ -21,6 +21,7 @@ _BATCH_SIZE = 50
 _BATCH_SLEEP = 0.3  # cede el event loop entre lotes
 
 
+
 async def _ensure_graph_initialized() -> None:
     """Inicializa el grafo con checkpointer PostgreSQL si aún no está listo.
 
@@ -205,6 +206,7 @@ async def _get_deal_data(deal_id: str) -> dict:
             "cerrado_el": cerrado_el,
             "tiempo_bot_a_prospecto_segs": tiempo_bot_a_prospecto,
             "tiempo_prospecto_a_won_segs": tiempo_prospecto_a_won,
+            "_raw_history": history,  # historial raw para bitrix_eventos
             **{k: v for k, v in stage_fechas.items()},
         }
     except Exception as exc:
@@ -219,20 +221,21 @@ async def _get_chat_data(phone: str) -> dict:
         from integrations.bitrix.connector import _call_poll
 
         redis = await get_redis()
-        chat_id = await redis.get(f"connector_chat:{phone}")
+        chat_id    = await redis.get(f"connector_chat:{phone}")
+        bitrix_conversation_id = (await redis.get(f"connector_session:{phone}")) or ""
         if not chat_id:
-            return {}
+            return {"_chat_id": "", "_conversation_id": "", "_raw_messages": []}
 
         result = await _call_poll("im.dialog.messages.get", {
             "DIALOG_ID": f"chat{chat_id}",
-            "LIMIT": 50,
+            "LIMIT": 200,
         })
         messages = sorted(
             result.get("result", {}).get("messages", []),
             key=lambda m: int(m.get("id", 0)),
         )
         if not messages:
-            return {}
+            return {"_chat_id": chat_id, "_raw_messages": []}
 
         primer_msg_cliente_ts: datetime | None = None
         primera_respuesta: datetime | None = None
@@ -291,6 +294,9 @@ async def _get_chat_data(phone: str) -> dict:
                 texto_humano_parts.append(text)
 
         return {
+            "_chat_id": chat_id,
+            "_conversation_id": bitrix_conversation_id,
+            "_raw_messages": messages,
             "primer_msg_cliente_ts": primer_msg_cliente_ts,
             "primera_respuesta": primera_respuesta,
             "el_bot_respondio_el": el_bot_respondio_el,
@@ -497,6 +503,24 @@ async def _upsert(thread: dict) -> None:
         rescates,
         texto_usuario, texto_agente, texto_humano, resumen,
     )
+
+    # Poblar bitrix_eventos con mensajes e historial real de Bitrix
+    raw_history  = deal.get("_raw_history", [])
+    raw_messages = chat.get("_raw_messages", [])
+    chat_id_val  = chat.get("_chat_id", "")
+    conversation_id_val = chat.get("_conversation_id", "")
+    if raw_history or raw_messages:
+        from jobs.kpi_eventos import upsert_eventos_from_bitrix
+        await upsert_eventos_from_bitrix(
+            id_conversacion=phone,
+            deal_id=deal_id,
+            chat_id=chat_id_val,
+            bitrix_conversation_id=conversation_id_val,
+            telefono=phone,
+            raw_messages=raw_messages,
+            raw_history=raw_history,
+            empleado_id=deal.get("empleado", ""),
+        )
 
 
 async def job_kpi_export() -> None:

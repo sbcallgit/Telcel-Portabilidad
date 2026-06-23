@@ -180,6 +180,36 @@ ALTER TABLE kpi_conversaciones
   ADD COLUMN IF NOT EXISTS tiempo_prospecto_a_won_segs  NUMERIC,
   ADD COLUMN IF NOT EXISTS rescates_enviados  INTEGER NOT NULL DEFAULT 0;
 
+-- Eventos granulares del canal Bitrix Open Lines (un registro por mensaje o cambio de etapa)
+CREATE TABLE IF NOT EXISTS bitrix_eventos (
+    id BIGSERIAL PRIMARY KEY,
+    id_conversacion TEXT NOT NULL,       -- thread_id del agente (teléfono o tg_...)
+    deal_id TEXT NOT NULL DEFAULT '',    -- ID del deal en Bitrix
+    chat_id TEXT NOT NULL DEFAULT '',    -- ID del chat en Bitrix Open Lines
+    telefono TEXT NOT NULL DEFAULT '',
+    bitrix_conversation_id TEXT NOT NULL DEFAULT '',  -- ID de conversación Open Lines en Bitrix (IMOL session)
+    message_id TEXT NOT NULL DEFAULT '', -- ID del mensaje en Bitrix (vacío en cambios de etapa)
+    fecha_evento TIMESTAMPTZ NOT NULL,
+    tipo_actor TEXT NOT NULL,            -- 'usuario' | 'bot' | 'humano' | 'sistema'
+    texto TEXT NOT NULL DEFAULT '',
+    stage_id TEXT NOT NULL DEFAULT '',   -- etapa activa en el momento del evento (ej. C90:NEW)
+    stage_nombre TEXT NOT NULL DEFAULT '',  -- nombre legible (ej. "Lead Nuevo / IA Porta")
+    empleado_id TEXT NOT NULL DEFAULT '',
+    -- Trazabilidad de transiciones de stage (solo tipo_actor = 'sistema')
+    stage_anterior      TEXT NOT NULL DEFAULT '',  -- stage del que venía el deal
+    stage_anterior_nombre TEXT NOT NULL DEFAULT '',
+    duracion_en_stage_segs NUMERIC,               -- segundos en stage_anterior antes de esta transición
+    duracion_formateada TEXT NOT NULL DEFAULT '',  -- "HH:MM:SS" para lectura directa
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT bitrix_eventos_uq UNIQUE (id_conversacion, message_id, tipo_actor)
+);
+
+CREATE INDEX IF NOT EXISTS bitrix_eventos_conv_idx   ON bitrix_eventos(id_conversacion);
+CREATE INDEX IF NOT EXISTS bitrix_eventos_deal_idx   ON bitrix_eventos(deal_id);
+CREATE INDEX IF NOT EXISTS bitrix_eventos_fecha_idx  ON bitrix_eventos(fecha_evento DESC);
+CREATE INDEX IF NOT EXISTS bitrix_eventos_actor_idx  ON bitrix_eventos(tipo_actor);
+CREATE INDEX IF NOT EXISTS bitrix_eventos_stage_idx  ON bitrix_eventos(stage_id);
+
 -- Usuarios del dashboard KPI
 CREATE TABLE IF NOT EXISTS dashboard_users (
     id SERIAL PRIMARY KEY,

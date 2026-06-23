@@ -152,6 +152,7 @@ bot_telcel_portabilidad/
 | `/admin/capi-test` | POST | Dispara evento CAPI manualmente — `simulate=true` para prueba |
 | `/admin/utm-data` | GET | Atribución UTM desde tabla `leads` — por campaña, fuente y ad_id |
 | `/admin/megacable-data` | GET | KPIs del agente Megacable desde BD externa |
+| `/admin/bitrix-eventos-seed` | POST | Puebla `bitrix_eventos` desde `kpi_conversaciones` existente (migración inicial) |
 
 Todos los endpoints aceptan `X-Admin-Token` (header) **o** `Authorization: Bearer <JWT>`.
 
@@ -600,6 +601,87 @@ Ambos endpoints retornan `{"status": "started"}` inmediatamente y corren en back
 - **Ruta en host:** `./reporteskpi/kpi_conversaciones_{YYYYMMDD_HHMM}.csv` (volumen bind mount en `docker-compose.yml`)
 - Encoding `utf-8-sig` (compatible con Excel / Power BI sin problemas de tildes)
 - La carpeta `./reporteskpi/` está en `.gitignore` — los CSVs no se suben al repo
+
+---
+
+## Trazabilidad de eventos Bitrix (`bitrix_eventos`)
+
+Tabla independiente de `kpi_conversaciones`. Una fila por evento del canal Bitrix Open Lines: mensajes (usuario/bot/humano) y cambios de stage. Permite reconstruir el timeline completo de cada deal con duración exacta entre stages.
+
+### Tabla `bitrix_eventos`
+
+| Campo | Descripción |
+|---|---|
+| `id_conversacion` | Thread del agente (teléfono o `tg_...`) |
+| `deal_id` | ID del deal en Bitrix |
+| `chat_id` | ID interno del chat en Bitrix IM (de Redis `connector_chat:{phone}`) |
+| `bitrix_conversation_id` | ID de la sesión Open Lines en Bitrix (ej. `2602658` = `IMOL_2602658`) |
+| `telefono` | Número del lead |
+| `message_id` | ID del mensaje en Bitrix (o `stage_{id}_{ts}` para cambios de stage) |
+| `fecha_evento` | Timestamp exacto del mensaje o cambio de stage |
+| `tipo_actor` | `usuario` / `bot` / `humano` / `sistema` |
+| `texto` | Contenido del mensaje o `"Etapa → Prospecto"` para eventos sistema |
+| `stage_id` | Stage vigente en ese momento (`C90:NEW`, `C90:WON`, etc.) |
+| `stage_nombre` | Nombre legible (`Lead Nuevo / IA Porta`, `Venta`, etc.) |
+| `empleado_id` | Agente asignado al deal |
+| `stage_anterior` | Stage del que venía el deal (solo eventos `sistema`) |
+| `stage_anterior_nombre` | Nombre legible del stage anterior |
+| `duracion_en_stage_segs` | Segundos que el deal estuvo en `stage_anterior` antes de esta transición |
+| `duracion_formateada` | Formato legible: `"8m 48s"`, `"1h 22m 05s"` |
+
+### Webhook de automatización (`POST /bitrix/stage-event`)
+
+Endpoint que recibe el webhook de las reglas de automatización de Bitrix cuando un deal cambia de stage (manual o por el bot).
+
+**Configuración de la regla en Bitrix24** — disparador "Al mover el deal a esta etapa", acción "Webhook saliente":
+- **URL:** `https://portabilidad.callcomcc.io/bitrix/stage-event`
+- **Campos a enviar:**
+
+| Campo | Valor Bitrix |
+|---|---|
+| `deal_id` | `{=Document:ID}` |
+| `stage_id` | `{=Document:STAGE_ID}` |
+| `prev_stage` | `{=Document:PREVIOUS_STAGE_ID}` |
+
+Si `stage_id` no viene en el payload, el endpoint lo consulta directamente a Bitrix vía `crm.deal.get`. La duración se calcula como diferencia entre el evento previo registrado en la tabla y el timestamp del webhook.
+
+**Mapa de stages** (pipeline 90):
+
+| Stage ID | Nombre |
+|---|---|
+| `C90:NEW` | Lead Nuevo / IA Porta |
+| `C90:PROSPECTO` | Prospecto |
+| `C90:UC_8WB2DT` | Escalamiento Humano |
+| `C90:SEGUIMIENTO` | Seguimiento |
+| `C90:1` | Rescate 1 |
+| `C90:2` | Rescate 2 |
+| `C90:3` | Rescate 3 |
+| `C90:WON` | Venta |
+| `C90:LOSE` | Caído |
+| `C90:8` | Recuperación |
+| `C90:PREPAYMENT_INVOIC` | Recuperación |
+
+### Módulo `jobs/kpi_eventos.py`
+
+- `upsert_eventos_from_bitrix()` — llamado desde `kpi_export._upsert()` para poblar mensajes e historial de stages con datos frescos de Bitrix.
+- `seed_from_kpi_conversaciones()` — migración inicial opcional, disparable via `POST /admin/bitrix-eventos-seed`.
+
+### Consultas útiles
+
+```sql
+-- Timeline completo de un deal
+SELECT fecha_evento, tipo_actor, stage_nombre, stage_anterior_nombre, duracion_formateada, texto
+FROM bitrix_eventos
+WHERE deal_id = '2302394'
+ORDER BY fecha_evento;
+
+-- Último mensaje de cada actor por conversación
+SELECT DISTINCT ON (id_conversacion, tipo_actor)
+    id_conversacion, tipo_actor, texto AS ultimo_mensaje, fecha_evento
+FROM bitrix_eventos
+WHERE tipo_actor != 'sistema'
+ORDER BY id_conversacion, tipo_actor, fecha_evento DESC;
+```
 
 ---
 
