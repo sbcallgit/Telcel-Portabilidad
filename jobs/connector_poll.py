@@ -86,6 +86,16 @@ async def _poll_phone(phone: str, chat_id: str, redis: object) -> None:
                 "msg_id": msg_id,
                 "author_id": author_id,
             })
+
+            async def _log_humano(p: str, t: str, mid: str, aid: int) -> None:
+                from jobs.kpi_eventos import log_mensaje_evento
+                await log_mensaje_evento(
+                    p, t, "humano",
+                    message_id=mid,
+                    autor_bitrix_id=str(aid),
+                )
+
+            asyncio.create_task(_log_humano(phone, text, msg_id, author_id))
         except Exception as exc:
             logger.error("forward_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
 

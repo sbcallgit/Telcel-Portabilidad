@@ -41,8 +41,9 @@ _INSERT_SQL = """
         message_id, fecha_evento, tipo_actor, texto,
         stage_id, stage_nombre, empleado_id,
         stage_anterior, stage_anterior_nombre,
-        duracion_en_stage_segs, duracion_formateada
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        duracion_en_stage_segs, duracion_formateada,
+        canal, wa_message_id, autor_bitrix_id
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
     ON CONFLICT (id_conversacion, message_id, tipo_actor) DO UPDATE SET
         bitrix_conversation_id  = EXCLUDED.bitrix_conversation_id,
         fecha_evento            = EXCLUDED.fecha_evento,
@@ -53,7 +54,13 @@ _INSERT_SQL = """
         stage_anterior          = EXCLUDED.stage_anterior,
         stage_anterior_nombre   = EXCLUDED.stage_anterior_nombre,
         duracion_en_stage_segs  = EXCLUDED.duracion_en_stage_segs,
-        duracion_formateada     = EXCLUDED.duracion_formateada
+        duracion_formateada     = EXCLUDED.duracion_formateada,
+        canal                   = EXCLUDED.canal,
+        wa_message_id           = CASE
+                                      WHEN EXCLUDED.wa_message_id <> '' THEN EXCLUDED.wa_message_id
+                                      ELSE bitrix_eventos.wa_message_id
+                                  END,
+        autor_bitrix_id         = EXCLUDED.autor_bitrix_id
 """
 
 
@@ -107,13 +114,18 @@ def _parse_stage_history(raw_history: list[dict]) -> list[tuple[str, datetime]]:
 
 def _parse_messages(
     messages: list[dict],
-) -> list[tuple[str, datetime, str, str]]:
+) -> list[tuple[str, datetime, str, str, str, str]]:
     """Parsea mensajes de im.dialog.messages.get.
 
-    Retorna lista de (message_id, fecha, tipo_actor, texto).
-    tipo_actor: 'usuario' | 'bot' | 'humano'
+    Retorna lista de (message_id, fecha, tipo_actor, texto, wa_message_id, autor_bitrix_id).
+
+    message_id: CONNECTOR_MID cuando está disponible (WA/Telegram/bot sintético), si no el
+                ID entero de Bitrix. Esto hace que el ID sea estable entre el insert
+                real-time y el job nocturno, evitando duplicados sin índice parcial.
+    wa_message_id: igual a message_id para mensajes de usuario/bot (ID de origen WA/Telegram).
+                   Vacío para mensajes del asesor humano (solo tienen ID Bitrix).
     """
-    resultado: list[tuple[str, datetime, str, str]] = []
+    resultado: list[tuple[str, datetime, str, str, str, str]] = []
     for msg in messages:
         ts_raw = msg.get("date")
         fecha = _to_utc(ts_raw)
@@ -123,22 +135,31 @@ def _parse_messages(
         text = (msg.get("text") or "").strip()
         params = msg.get("params") or {}
         author_id = msg.get("author_id", 0)
-        msg_id = str(msg.get("id", ""))
+        bitrix_msg_id = str(msg.get("id", ""))
+        connector_mid = str(params.get("CONNECTOR_MID", "")) if isinstance(params, dict) else ""
 
         is_bot = text.startswith("🤖 Vera |")
-        # Mensajes del cliente vienen con CONNECTOR_MID en params (vía imconnector)
-        is_client = bool(isinstance(params, dict) and params.get("CONNECTOR_MID")) and not is_bot
+        is_client = bool(connector_mid) and not is_bot
 
         if is_bot:
             tipo_actor = "bot"
+            # CONNECTOR_MID = el ID sintético "bot_{phone}_{ts}" que enviamos a imconnector
+            msg_id = connector_mid or bitrix_msg_id
+            wa_msg_id = connector_mid
         elif is_client:
             tipo_actor = "usuario"
+            # CONNECTOR_MID = WA message ID original (wamid.xxx)
+            msg_id = connector_mid or bitrix_msg_id
+            wa_msg_id = connector_mid
         elif author_id:
             tipo_actor = "humano"
+            msg_id = bitrix_msg_id
+            wa_msg_id = ""
         else:
             continue  # mensaje de sistema interno, ignorar
 
-        resultado.append((msg_id, fecha, tipo_actor, text))
+        autor_bitrix_id = str(author_id) if author_id else ""
+        resultado.append((msg_id, fecha, tipo_actor, text, wa_msg_id, autor_bitrix_id))
     return resultado
 
 
@@ -149,7 +170,7 @@ def _build_rows(
     bitrix_conversation_id: str,
     telefono: str,
     empleado_id: str,
-    parsed_messages: list[tuple[str, datetime, str, str]],
+    parsed_messages: list[tuple[str, datetime, str, str, str, str]],
     stage_history: list[tuple[str, datetime]],
     raw_history: list[dict],
 ) -> list[tuple]:
@@ -160,15 +181,17 @@ def _build_rows(
     - Un row por cambio de etapa (tipo_actor = 'sistema').
     """
     rows: list[tuple] = []
+    canal = "telegram" if id_conversacion.startswith("tg_") else "whatsapp"
 
     # Mensajes del canal Open Lines (sin campos de trazabilidad de stage)
-    for msg_id, fecha, tipo_actor, texto in parsed_messages:
+    for msg_id, fecha, tipo_actor, texto, wa_message_id, autor_bitrix_id in parsed_messages:
         sid, sname = _stage_at(fecha, stage_history)
         rows.append((
             id_conversacion, deal_id, chat_id, bitrix_conversation_id, telefono,
             msg_id, fecha, tipo_actor, texto,
             sid, sname, empleado_id,
             "", "", None, "",  # stage_anterior, stage_anterior_nombre, duracion, fmt
+            canal, wa_message_id, autor_bitrix_id,
         ))
 
     # Cambios de etapa como eventos 'sistema' con trazabilidad completa
@@ -197,6 +220,7 @@ def _build_rows(
             dt, "sistema", f"Etapa → {_STAGE_NOMBRES.get(stage_id, stage_id)}",
             stage_id, _STAGE_NOMBRES.get(stage_id, stage_id), empleado_id,
             stage_ant, stage_ant_nombre, delta_segs, duracion_fmt,
+            canal, "", empleado_id,
         ))
 
     return rows
@@ -280,6 +304,71 @@ async def _fetch_bitrix_data(
             logger.warning("bitrix_eventos_history_error", extra={"deal_id": deal_id, "error": str(exc)})
 
     return bitrix_conversation_id, chat_id, raw_messages, raw_history
+
+
+async def log_mensaje_evento(
+    phone: str,
+    text: str,
+    tipo_actor: str,
+    message_id: str,
+    wa_message_id: str = "",
+    autor_bitrix_id: str = "",
+) -> None:
+    """Registra un mensaje individual en bitrix_eventos en tiempo real.
+
+    Llamar con asyncio.create_task() para no bloquear el path crítico.
+
+    message_id: WA message ID para usuario, ID sintético "bot_{phone}_{ts}" para bot,
+                ID entero de Bitrix para mensajes del asesor humano.
+    wa_message_id: igual a message_id para usuario/bot; vacío para humano.
+    """
+    from integrations.redis_client import get_redis
+
+    try:
+        redis = await get_redis()
+        deal_id = (await redis.get(f"connector_deal:{phone}")) or ""
+        chat_id = (await redis.get(f"connector_chat:{phone}")) or ""
+        bitrix_conversation_id = (await redis.get(f"connector_session:{phone}")) or ""
+
+        row = await db.fetchrow(
+            "SELECT bitrix_stage FROM leads WHERE telefono = $1", phone
+        )
+        stage_id = (row["bitrix_stage"] if row else "") or ""
+        stage_nombre = _STAGE_NOMBRES.get(stage_id, stage_id)
+
+        canal = "telegram" if phone.startswith("tg_") else "whatsapp"
+        now = datetime.now(timezone.utc)
+
+        await db.execute(
+            """
+            INSERT INTO bitrix_eventos (
+                id_conversacion, deal_id, chat_id, bitrix_conversation_id, telefono,
+                message_id, fecha_evento, tipo_actor, texto,
+                stage_id, stage_nombre, empleado_id,
+                stage_anterior, stage_anterior_nombre,
+                duracion_en_stage_segs, duracion_formateada,
+                canal, wa_message_id, autor_bitrix_id
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+            ON CONFLICT (id_conversacion, message_id, tipo_actor) DO UPDATE SET
+                texto           = EXCLUDED.texto,
+                stage_id        = EXCLUDED.stage_id,
+                stage_nombre    = EXCLUDED.stage_nombre,
+                deal_id         = CASE WHEN EXCLUDED.deal_id <> '' THEN EXCLUDED.deal_id
+                                       ELSE bitrix_eventos.deal_id END,
+                wa_message_id   = CASE WHEN EXCLUDED.wa_message_id <> '' THEN EXCLUDED.wa_message_id
+                                       ELSE bitrix_eventos.wa_message_id END
+            """,
+            phone, deal_id, chat_id, bitrix_conversation_id, phone,
+            message_id, now, tipo_actor, text,
+            stage_id, stage_nombre, "",
+            "", "", None, "",
+            canal, wa_message_id, autor_bitrix_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "log_mensaje_evento_error",
+            extra={"phone_tail": phone[-4:], "tipo_actor": tipo_actor, "error": str(exc)},
+        )
 
 
 async def seed_from_kpi_conversaciones() -> dict:

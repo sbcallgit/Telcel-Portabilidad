@@ -205,6 +205,7 @@ async def bitrix_stage_event(request: Request) -> dict:
     stage_nombre      = _STAGE_NOMBRES.get(stage_id, stage_id)
     prev_stage_nombre = _STAGE_NOMBRES.get(prev_stage, prev_stage) if prev_stage else ""
     id_conversacion   = phone or deal_id
+    canal             = "telegram" if id_conversacion.startswith("tg_") else "whatsapp"
     message_id        = f"stage_{stage_id}_{int(now.timestamp())}"
     texto             = f"Etapa → {stage_nombre}"
 
@@ -219,7 +220,7 @@ async def bitrix_stage_event(request: Request) -> dict:
     if chat_id:
         try:
             from integrations.bitrix.connector import _call_poll
-            from jobs.kpi_eventos import _parse_messages, _to_utc as _kpi_to_utc
+            from jobs.kpi_eventos import _parse_messages
             result = await _call_poll("im.dialog.messages.get", {
                 "DIALOG_ID": f"chat{chat_id}",
                 "LIMIT": 200,
@@ -228,7 +229,7 @@ async def bitrix_stage_event(request: Request) -> dict:
                 result.get("result", {}).get("messages", []),
                 key=lambda m: int(m.get("id", 0)),
             )
-            for msg_id_m, fecha_m, tipo_m, texto_m in _parse_messages(msgs_raw):
+            for _mid, fecha_m, tipo_m, texto_m, _wa_mid, _autor in _parse_messages(msgs_raw):
                 if tipo_m == "usuario":
                     ult_msg_usuario = texto_m
                     fecha_ult_usuario = fecha_m
@@ -241,6 +242,33 @@ async def bitrix_stage_event(request: Request) -> dict:
         except Exception as exc:
             logger.warning("bitrix_stage_event_msgs_error", extra={"deal_id": deal_id, "error": str(exc)})
 
+    # Fallback: si no hay chat_id en Redis, usar los mensajes ya registrados en bitrix_eventos
+    if not chat_id and deal_id and not (ult_msg_usuario or ult_msg_bot or ult_msg_humano):
+        try:
+            rows_local = await db.fetch(
+                """
+                SELECT tipo_actor, texto, fecha_evento
+                FROM bitrix_eventos
+                WHERE deal_id = $1 AND tipo_actor IN ('usuario', 'bot', 'humano')
+                ORDER BY fecha_evento DESC
+                LIMIT 60
+                """,
+                deal_id,
+            )
+            for r in rows_local:
+                actor = r["tipo_actor"]
+                if actor == "usuario" and not ult_msg_usuario:
+                    ult_msg_usuario = r["texto"]
+                    fecha_ult_usuario = r["fecha_evento"]
+                elif actor == "bot" and not ult_msg_bot:
+                    ult_msg_bot = r["texto"].replace("🤖 Vera | ", "", 1)
+                    fecha_ult_bot = r["fecha_evento"]
+                elif actor == "humano" and not ult_msg_humano:
+                    ult_msg_humano = r["texto"]
+                    fecha_ult_humano = r["fecha_evento"]
+        except Exception as exc:
+            logger.warning("bitrix_stage_event_local_fallback_error", extra={"deal_id": deal_id, "error": str(exc)})
+
     await db.execute(
         """
         INSERT INTO bitrix_eventos (
@@ -251,8 +279,9 @@ async def bitrix_stage_event(request: Request) -> dict:
             duracion_en_stage_segs, duracion_formateada,
             ultimo_mensaje_usuario, fecha_ultimo_usuario,
             ultimo_mensaje_bot,     fecha_ultimo_bot,
-            ultimo_mensaje_humano,  fecha_ultimo_humano
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+            ultimo_mensaje_humano,  fecha_ultimo_humano,
+            canal, wa_message_id, autor_bitrix_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
         ON CONFLICT (id_conversacion, message_id, tipo_actor) DO NOTHING
         """,
         id_conversacion, deal_id, chat_id, bitrix_conversation_id, phone,
@@ -263,6 +292,7 @@ async def bitrix_stage_event(request: Request) -> dict:
         ult_msg_usuario, fecha_ult_usuario,
         ult_msg_bot,     fecha_ult_bot,
         ult_msg_humano,  fecha_ult_humano,
+        canal, "", empleado_id,
     )
 
     logger.info(

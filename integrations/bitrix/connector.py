@@ -197,6 +197,7 @@ async def send_bot_message(phone: str, text: str) -> None:
 
     ts = int(time.time())
     try:
+        synthetic_id = f"bot_{phone}_{ts}"
         await _call("imconnector.send.messages", {
             "CONNECTOR": settings.bitrix_connector_id,
             "LINE": settings.bitrix_connector_line_id,
@@ -207,7 +208,7 @@ async def send_bot_message(phone: str, text: str) -> None:
                     "phone": phone,
                 },
                 "message": {
-                    "id": f"bot_{phone}_{ts}",
+                    "id": synthetic_id,
                     "date": ts,
                     "text": f"🤖 Vera | {text}",
                 },
@@ -218,6 +219,16 @@ async def send_bot_message(phone: str, text: str) -> None:
             }],
         })
         logger.info("connector_bot_msg_sent", extra={"phone_tail": phone[-4:]})
+
+        async def _log_bot() -> None:
+            from jobs.kpi_eventos import log_mensaje_evento
+            await log_mensaje_evento(
+                phone, text, "bot",
+                message_id=synthetic_id,
+                wa_message_id=synthetic_id,
+            )
+
+        asyncio.create_task(_log_bot())
     except Exception as exc:
         logger.error("connector_bot_msg_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
 

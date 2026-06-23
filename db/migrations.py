@@ -217,6 +217,10 @@ CREATE INDEX IF NOT EXISTS bitrix_eventos_fecha_idx  ON bitrix_eventos(fecha_eve
 CREATE INDEX IF NOT EXISTS bitrix_eventos_actor_idx  ON bitrix_eventos(tipo_actor);
 CREATE INDEX IF NOT EXISTS bitrix_eventos_stage_idx  ON bitrix_eventos(stage_id);
 
+ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS canal           TEXT NOT NULL DEFAULT '';
+ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS wa_message_id   TEXT NOT NULL DEFAULT '';
+ALTER TABLE bitrix_eventos ADD COLUMN IF NOT EXISTS autor_bitrix_id TEXT NOT NULL DEFAULT '';
+
 -- Usuarios del dashboard KPI
 CREATE TABLE IF NOT EXISTS dashboard_users (
     id SERIAL PRIMARY KEY,

@@ -127,6 +127,19 @@ async def receive_message(request: Request) -> dict:
     except Exception as exc:
         logger.error("connector_user_msg_failed", extra={"error": str(exc)})
 
+    # Registrar mensaje del usuario en bitrix_eventos (en background)
+    import asyncio as _asyncio
+
+    async def _log_usuario() -> None:
+        from jobs.kpi_eventos import log_mensaje_evento
+        await log_mensaje_evento(
+            phone, text, "usuario",
+            message_id=message_id,
+            wa_message_id=message_id,
+        )
+
+    _asyncio.create_task(_log_usuario())
+
     # Guard: si el bot está pausado para este número, el asesor gestiona el chat
     bot_pausado_key = f"bot_pausado:{phone}"
     if await redis.get(bot_pausado_key):
