@@ -142,15 +142,32 @@ export interface UtmData {
   por_fuente: UtmFuente[];
 }
 
-export interface CostoResultado {
+export interface CostoResumen {
   stage_id: string;
   stage_nombre: string;
   conversaciones: number;
+  mensajes_bot: number;
   costo_promedio_usd: number;
   costo_total_usd: number;
   avg_tokens_entrada: number;
   avg_tokens_salida: number;
-  avg_mensajes_bot: number;
+}
+
+export interface CostoDetalle {
+  id_conversacion: string;
+  deal_id: string;
+  stage_id: string;
+  stage_nombre: string;
+  mensajes_bot: number;
+  costo_total_usd: number;
+  costo_promedio_usd: number;
+  tokens_entrada: number;
+  tokens_salida: number;
+}
+
+export interface CostoResultado {
+  resumen: CostoResumen[];
+  detalle: CostoDetalle[];
 }
 
 export interface FunnelStage {
@@ -235,11 +252,11 @@ export class KpiService {
     });
   }
 
-  getCostoResultado(desde?: string, hasta?: string): Observable<CostoResultado[]> {
+  getCostoResultado(desde?: string, hasta?: string): Observable<CostoResultado> {
     let params = new HttpParams();
     if (desde) params = params.set('desde', desde);
     if (hasta) params = params.set('hasta', hasta);
-    return this.http.get<CostoResultado[]>('/api/admin/costo-resultado', { headers: this.headers, params });
+    return this.http.get<CostoResultado>('/api/admin/costo-resultado', { headers: this.headers, params });
   }
 
   getFunnelData(desde?: string, hasta?: string): Observable<FunnelData> {

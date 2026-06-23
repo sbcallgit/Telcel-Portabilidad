@@ -3,7 +3,7 @@ import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Chart, registerables } from 'chart.js';
-import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow, FunnelData, FunnelTransicion, CostoResultado } from '../../services/kpi.service';
+import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow, FunnelData, FunnelTransicion, CostoResultado, CostoResumen, CostoDetalle } from '../../services/kpi.service';
 import { AuthService } from '../../services/auth.service';
 
 Chart.register(...registerables);
@@ -86,7 +86,8 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('funnelChart') funnelChartRef!: ElementRef<HTMLCanvasElement>;
   private funnelChart?: Chart;
 
-  costoData: CostoResultado[] = [];
+  costoResumen: CostoResumen[] = [];
+  costoDetalle: CostoDetalle[] = [];
   costoLoading = true;
   costoError = '';
   @ViewChild('costoChart') costoChartRef!: ElementRef<HTMLCanvasElement>;
@@ -126,7 +127,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.chartsReady = true;
     if (this.resumen) this.renderCharts();
     if (this.funnelData) this.renderFunnelChart();
-    if (this.costoData.length) this.renderCostoChart();
+    if (this.costoResumen.length) this.renderCostoChart();
     if (this.metaData) this.renderMetaChart();
     if (this.utmData) this.renderUtmChart();
     if (this.megacableData) this.renderMegacableCharts();
@@ -256,7 +257,8 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.costoError = '';
     this.kpiSvc.getCostoResultado(this.desde || undefined, this.hasta || undefined).subscribe({
       next: (data) => {
-        this.costoData = data;
+        this.costoResumen = data.resumen;
+        this.costoDetalle = data.detalle;
         this.costoLoading = false;
         if (this.chartsReady) setTimeout(() => this.renderCostoChart(), 0);
       },
@@ -268,12 +270,12 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   private renderCostoChart(): void {
-    if (!this.costoData.length || !this.costoChartRef) return;
+    if (!this.costoResumen.length || !this.costoChartRef) return;
     this.costoChart?.destroy();
 
-    const labels  = this.costoData.map(r => r.stage_nombre);
-    const costos  = this.costoData.map(r => r.costo_promedio_usd);
-    const convs   = this.costoData.map(r => r.conversaciones);
+    const labels  = this.costoResumen.map(r => r.stage_nombre);
+    const costos  = this.costoResumen.map(r => r.costo_promedio_usd);
+    const convs   = this.costoResumen.map(r => r.conversaciones);
 
     const colorMap: Record<string, string> = {
       'C90:WON':       '#10b981',
@@ -281,7 +283,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
       'C90:NEW':       '#e8001d',
       'C90:PROSPECTO': '#6366f1',
     };
-    const barColors = this.costoData.map(r =>
+    const barColors = this.costoResumen.map(r =>
       colorMap[r.stage_id] ?? '#3b82f6'
     );
 
@@ -321,13 +323,13 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
             callbacks: {
               label: (ctx) => {
                 if (ctx.dataset.yAxisID === 'yCosto') {
-                  const r = this.costoData[ctx.dataIndex];
+                  const r = this.costoResumen[ctx.dataIndex];
                   return [
                     ` Costo prom: $${(ctx.parsed.y ?? 0).toFixed(4)} USD`,
                     ` Total: $${r.costo_total_usd.toFixed(4)} USD`,
                     ` Tokens entrada prom: ${r.avg_tokens_entrada.toLocaleString()}`,
                     ` Tokens salida prom: ${r.avg_tokens_salida.toLocaleString()}`,
-                    ` Msgs bot prom: ${r.avg_mensajes_bot}`,
+                    ` Msgs bot: ${r.mensajes_bot}`,
                   ];
                 }
                 return ` ${ctx.parsed.y} conversaciones`;

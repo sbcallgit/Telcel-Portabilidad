@@ -158,7 +158,7 @@
       }
 
       <!-- Costo LLM por resultado -->
-      <div class="chart-card" style="margin-top:1.5rem" [style.display]="costoData.length ? 'block' : 'none'">
+      <div class="chart-card" style="margin-top:1.5rem" [style.display]="costoResumen.length ? 'block' : 'none'">
         <h3>Costo del bot por resultado de conversación</h3>
         @if (costoLoading) {
           <div class="loading-state">Cargando costos…</div>
@@ -168,37 +168,78 @@
         <div class="chart-wrap" style="height:280px">
           <canvas #costoChart></canvas>
         </div>
-        @if (!costoLoading && !costoError && costoData.length) {
+        @if (!costoLoading && !costoError && costoResumen.length) {
+          <!-- Tabla resumen por stage -->
           <div class="table-card" style="margin-top:1rem;box-shadow:none;padding:0">
+            <div class="table-header" style="padding:0.5rem 0 0.25rem">
+              <h4 style="margin:0;font-size:0.85rem;color:#64748b">Resumen por etapa</h4>
+            </div>
             <div class="table-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Resultado</th>
+                    <th>Etapa</th>
                     <th style="text-align:right">Convs.</th>
+                    <th style="text-align:right">Msgs bot</th>
                     <th style="text-align:right">Costo prom. (USD)</th>
                     <th style="text-align:right">Costo total (USD)</th>
                     <th style="text-align:right">Tokens entrada</th>
                     <th style="text-align:right">Tokens salida</th>
-                    <th style="text-align:right">Msgs bot prom.</th>
                   </tr>
                 </thead>
                 <tbody>
-                  @for (r of costoData; track r.stage_id) {
+                  @for (r of costoResumen; track r.stage_id) {
                     <tr>
                       <td><strong>{{ r.stage_nombre }}</strong></td>
                       <td style="text-align:right">{{ r.conversaciones }}</td>
+                      <td style="text-align:right">{{ r.mensajes_bot }}</td>
                       <td style="text-align:right">${{ r.costo_promedio_usd.toFixed(4) }}</td>
                       <td style="text-align:right">${{ r.costo_total_usd.toFixed(4) }}</td>
                       <td style="text-align:right">{{ r.avg_tokens_entrada.toLocaleString() }}</td>
                       <td style="text-align:right">{{ r.avg_tokens_salida.toLocaleString() }}</td>
-                      <td style="text-align:right">{{ r.avg_mensajes_bot }}</td>
                     </tr>
                   }
                 </tbody>
               </table>
             </div>
           </div>
+          <!-- Tabla detalle por conversación con deal_id -->
+          @if (costoDetalle.length) {
+            <div class="table-card" style="margin-top:1rem;box-shadow:none;padding:0">
+              <div class="table-header" style="padding:0.5rem 0 0.25rem">
+                <h4 style="margin:0;font-size:0.85rem;color:#64748b">Detalle por conversación</h4>
+                <span class="table-count">{{ costoDetalle.length }} registros</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Deal ID</th>
+                      <th>Conversación</th>
+                      <th>Etapa</th>
+                      <th style="text-align:right">Msgs bot</th>
+                      <th style="text-align:right">Costo total (USD)</th>
+                      <th style="text-align:right">Tokens entrada</th>
+                      <th style="text-align:right">Tokens salida</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (d of costoDetalle; track d.id_conversacion + d.stage_id) {
+                      <tr>
+                        <td><code>{{ d.deal_id || '—' }}</code></td>
+                        <td><code>{{ d.id_conversacion }}</code></td>
+                        <td>{{ d.stage_nombre }}</td>
+                        <td style="text-align:right">{{ d.mensajes_bot }}</td>
+                        <td style="text-align:right">${{ d.costo_total_usd.toFixed(4) }}</td>
+                        <td style="text-align:right">{{ d.tokens_entrada.toLocaleString() }}</td>
+                        <td style="text-align:right">{{ d.tokens_salida.toLocaleString() }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          }
         }
       </div>
 
