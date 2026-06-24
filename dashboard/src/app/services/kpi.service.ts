@@ -32,6 +32,7 @@ export interface Conversacion {
   mensajes_humano: number;
   tiempo_primera_respuesta_segs: number | null;
   resumen: string;
+  motivo_escalacion: string;
 }
 
 export interface Paginacion {

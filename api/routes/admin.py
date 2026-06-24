@@ -105,7 +105,7 @@ async def get_kpi_data(
         SELECT
             id_conversacion, telefono, estado_actual, etapa, empleado,
             creado_el, cerrado_el, mensajes_cliente, mensajes_bot, mensajes_humano,
-            tiempo_primera_respuesta_segs, resumen
+            tiempo_primera_respuesta_segs, resumen, motivo_escalacion
         FROM kpi_conversaciones {where}
         ORDER BY creado_el DESC NULLS LAST
         LIMIT ${idx} OFFSET ${idx + 1}

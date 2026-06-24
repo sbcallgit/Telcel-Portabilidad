@@ -125,6 +125,7 @@ async def _get_message_counts(phone: str) -> dict:
             "primer_mensaje": primer_msg[:500],
             "texto_usuario": "\n---\n".join(texto_usuario_parts),
             "texto_agente": "\n---\n".join(texto_agente_parts),
+            "motivo_escalacion": snapshot.values.get("motivo_escalacion") or "",
         }
     except Exception as exc:
         logger.warning("kpi_msg_count_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
@@ -423,6 +424,7 @@ async def _upsert(thread: dict) -> None:
             tiempo_bot_a_prospecto_segs, tiempo_prospecto_a_won_segs,
             rescates_enviados,
             texto_usuario, texto_agente, texto_humano, resumen,
+            motivo_escalacion,
             fecha_extraccion
         ) VALUES (
             $1, $2, $3, $4,
@@ -438,6 +440,7 @@ async def _upsert(thread: dict) -> None:
             $36, $37,
             $38,
             $39, $40, $41, $42,
+            $43,
             NOW()
         )
         ON CONFLICT (id_conversacion) DO UPDATE SET
@@ -479,6 +482,7 @@ async def _upsert(thread: dict) -> None:
             texto_agente                   = EXCLUDED.texto_agente,
             texto_humano                   = EXCLUDED.texto_humano,
             resumen                        = EXCLUDED.resumen,
+            motivo_escalacion              = EXCLUDED.motivo_escalacion,
             fecha_extraccion               = NOW()
         """,
         phone, deal.get("id_contacto", ""), deal_id, phone,
@@ -502,6 +506,7 @@ async def _upsert(thread: dict) -> None:
         deal.get("tiempo_bot_a_prospecto_segs"), deal.get("tiempo_prospecto_a_won_segs"),
         rescates,
         texto_usuario, texto_agente, texto_humano, resumen,
+        msg_data.get("motivo_escalacion", ""),
     )
 
     # Poblar bitrix_eventos con mensajes e historial real de Bitrix

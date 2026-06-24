@@ -1,6 +1,9 @@
 """Nodo de escalamiento: handoff a asesor humano vía Bitrix24 Open Lines."""
 
+import asyncio
 import logging
+
+from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.portabilidad.state import PortabilidadState
 from config.settings import settings
@@ -44,6 +47,35 @@ def _resolve_stage(motivo: str) -> str:
     if motivo in _SEGUIMIENTO_MOTIVOS:
         return settings.bitrix_stage_seguimiento
     return settings.bitrix_stage_prospecto  # "cierre" y cualquier otro
+
+
+async def _generar_resumen_chat(state: PortabilidadState) -> str:
+    """Genera un resumen breve del chat para el asesor usando el LLM."""
+    messages = state.get("messages") or []
+    parts: list[str] = []
+    for m in messages[-20:]:
+        if isinstance(m, HumanMessage):
+            parts.append(f"Cliente: {str(m.content)[:300]}")
+        elif isinstance(m, AIMessage):
+            parts.append(f"Vera: {str(m.content)[:300]}")
+    if not parts:
+        return ""
+    try:
+        from agents.llm import get_llm
+        motivo = state.get("motivo_escalacion") or ""
+        prompt = (
+            f"Motivo de escalamiento: {motivo}\n\n"
+            "Resume en 3 oraciones esta conversación de portabilidad Telcel para el asesor humano. "
+            "Incluye: qué necesita el cliente, qué objeciones tuvo y por qué se escaló. "
+            "Sé directo y útil para el asesor. Solo el resumen, sin encabezados.\n\n"
+            + "\n".join(parts)
+        )
+        llm = get_llm(temperature=0.1)
+        response = await llm.ainvoke(prompt)
+        return str(response.content).strip()[:800]
+    except Exception as exc:
+        logger.warning("resumen_chat_escalamiento_error", extra={"error": str(exc)})
+        return ""
 
 
 async def _upsert_lead_kpis(context: dict, phone: str, deal_id: str) -> None:
@@ -148,6 +180,18 @@ async def escalate_node(state: PortabilidadState) -> dict:
 
     # Persistir KPIs en leads para el job de seguimientos
     await _upsert_lead_kpis(context, phone, deal_id)
+
+    # Poblar campos personalizados en Bitrix (motivo + resumen) en background
+    async def _set_bitrix_campos() -> None:
+        try:
+            from integrations.bitrix.client import BitrixClient
+            resumen = await _generar_resumen_chat(state)
+            await BitrixClient().set_campos_escalamiento(deal_id, motivo, resumen)
+        except Exception as exc:
+            logger.warning("set_bitrix_campos_error", extra={"error": str(exc)})
+
+    if deal_id:
+        asyncio.create_task(_set_bitrix_campos())
 
     logger.info(
         "escalation_done",

@@ -54,6 +54,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("postgres_checkpointer_failed", extra={"error": str(exc)})
         await setup_graph()  # Fallback a MemorySaver
 
+    # Crear campos personalizados en Bitrix si no existen
+    try:
+        from integrations.bitrix.client import BitrixClient
+        await BitrixClient().ensure_custom_fields()
+    except Exception as exc:
+        logger.warning("bitrix_ensure_fields_failed", extra={"error": str(exc)})
+
     await start_connector_poll()
     scheduler = create_scheduler()
     scheduler.start()

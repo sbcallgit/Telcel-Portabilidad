@@ -178,7 +178,8 @@ ALTER TABLE kpi_conversaciones
   ADD COLUMN IF NOT EXISTS tipificacion       TEXT NOT NULL DEFAULT '',
   ADD COLUMN IF NOT EXISTS tiempo_bot_a_prospecto_segs  NUMERIC,
   ADD COLUMN IF NOT EXISTS tiempo_prospecto_a_won_segs  NUMERIC,
-  ADD COLUMN IF NOT EXISTS rescates_enviados  INTEGER NOT NULL DEFAULT 0;
+  ADD COLUMN IF NOT EXISTS rescates_enviados  INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS motivo_escalacion  TEXT NOT NULL DEFAULT '';
 
 -- Eventos granulares del canal Bitrix Open Lines (un registro por mensaje o cambio de etapa)
 CREATE TABLE IF NOT EXISTS bitrix_eventos (

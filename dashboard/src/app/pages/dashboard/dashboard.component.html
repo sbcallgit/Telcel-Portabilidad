@@ -277,6 +277,7 @@
                 <th>Msgs Cliente</th>
                 <th>Msgs Asesor</th>
                 <th>1ª Resp.</th>
+                <th>Motivo Escalamiento</th>
                 <th>Resumen</th>
               </tr>
             </thead>
@@ -291,11 +292,12 @@
                   <td class="num">{{ c.mensajes_cliente }}</td>
                   <td class="num">{{ c.mensajes_humano }}</td>
                   <td class="num">{{ formatSecs(c.tiempo_primera_respuesta_segs) }}</td>
+                  <td>{{ c.motivo_escalacion || '—' }}</td>
                   <td class="resumen-cell" [title]="c.resumen">{{ c.resumen || '—' }}</td>
                 </tr>
               }
               @empty {
-                <tr><td colspan="9" class="empty">Sin conversaciones en este rango.</td></tr>
+                <tr><td colspan="10" class="empty">Sin conversaciones en este rango.</td></tr>
               }
             </tbody>
           </table>

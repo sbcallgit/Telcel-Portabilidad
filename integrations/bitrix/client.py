@@ -8,6 +8,9 @@ from integrations.exceptions import BitrixError
 
 logger = logging.getLogger(__name__)
 
+_UF_MOTIVO_ESCALAMIENTO = "UF_CRM_MOTIVO_ESCALAMIENTO_HUMANO"
+_UF_RESUMEN_CONVERSACION = "UF_CRM_RESUMEN_CONVERSACION"
+
 
 class BitrixClient:
     """Cliente para el webhook entrante de Bitrix24 (no requiere sesión interactiva)."""
@@ -207,6 +210,45 @@ class BitrixClient:
         except Exception as exc:
             logger.warning("bitrix_stage_history_error", extra={"deal_id": deal_id, "error": str(exc)})
             return []
+
+    async def _ensure_one_userfield(self, field_name_suffix: str, label: str) -> None:
+        """Crea un campo personalizado en deals si no existe. field_name_suffix sin prefijo UF_CRM_."""
+        full_name = f"UF_CRM_{field_name_suffix}"
+        result = await self._call("crm.deal.userfield.list", {
+            "filter": {"FIELD_NAME": full_name},
+        })
+        if result.get("result"):
+            return
+        await self._call("crm.deal.userfield.add", {
+            "fields": {
+                "ENTITY_ID": "CRM_DEAL",
+                "FIELD_NAME": field_name_suffix,
+                "USER_TYPE_ID": "string",
+                "EDIT_FORM_LABEL": {"ru": label},
+                "LIST_COLUMN_LABEL": {"ru": label},
+                "IS_SEARCHABLE": "Y",
+            },
+        })
+        logger.info("bitrix_userfield_created", extra={"field": full_name})
+
+    async def ensure_custom_fields(self) -> None:
+        """Crea los campos personalizados del bot en deals si no existen."""
+        try:
+            await self._ensure_one_userfield("MOTIVO_ESCALAMIENTO_HUMANO", "Motivo de Escalamiento")
+            await self._ensure_one_userfield("RESUMEN_CONVERSACION", "Resumen de Conversación")
+        except Exception as exc:
+            logger.warning("bitrix_ensure_fields_error", extra={"error": str(exc)})
+
+    async def set_campos_escalamiento(self, deal_id: str, motivo: str, resumen: str) -> None:
+        """Puebla motivo y resumen de conversación en el deal al escalar."""
+        try:
+            await self.actualizar_deal(deal_id, {
+                _UF_MOTIVO_ESCALAMIENTO: motivo,
+                _UF_RESUMEN_CONVERSACION: resumen,
+            })
+            logger.info("bitrix_campos_escalamiento_set", extra={"deal_id": deal_id, "motivo": motivo})
+        except Exception as exc:
+            logger.warning("bitrix_campos_escalamiento_error", extra={"deal_id": deal_id, "error": str(exc)})
 
     async def marcar_venta_exitosa(self, deal_id: str) -> dict:
         """Mueve el deal a la etapa VENTA (C90:WON)."""
