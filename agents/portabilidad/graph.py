@@ -77,6 +77,33 @@ async def _fin_node(state: PortabilidadState) -> dict:
 
     # ── Escalamiento duro: asesor humano tiene el control ─────────────────────
     if motivo in _ESCALAMIENTO_DURO:
+        # Verificar si el deal fue marcado como Caído → reactivar conversación
+        deal_id = state.get("bitrix_lead_id") or ""
+        if deal_id:
+            try:
+                from integrations.bitrix.client import BitrixClient
+                deal_data = await BitrixClient().get_deal(deal_id)
+                if deal_data.get("STAGE_ID") == "C90:LOSE":
+                    await BitrixClient().mover_etapa(deal_id, "C90:PREPAYMENT_INVOIC")
+                    logger.info("fin_node_reactivado_desde_caido", extra={
+                        "phone_tail": phone[-4:] if len(phone) >= 4 else phone,
+                        "deal_id": deal_id,
+                    })
+                    return {
+                        "etapa": "validacion",
+                        "motivo_escalacion": "",
+                        "escalate_to_human": False,
+                        "messages": [AIMessage(content=(
+                            "¡Hola de nuevo! 👋 Puedo ayudarte con tu portabilidad a Telcel. "
+                            "¿Me compartes tu número de 10 dígitos para ver la promo que aplica?"
+                        ))],
+                    }
+            except Exception as exc:
+                logger.warning("fin_node_reactivacion_error", extra={
+                    "phone_tail": phone[-4:] if len(phone) >= 4 else phone,
+                    "error": str(exc),
+                })
+
         # Única excepción: cliente se decide a portarse → reactivar a Prospecto
         if any(w in lower for w in _FIN_PROSPECTO):
             context = _build_context(state)

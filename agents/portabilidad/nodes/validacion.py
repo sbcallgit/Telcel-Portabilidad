@@ -267,11 +267,15 @@ async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
             import asyncio
             asyncio.create_task(bx.link_contact_to_deal(deal_id, phone))
 
-            # Si el deal estaba Caído, reactivarlo a Recuperación (C90:8)
+            # Si el deal estaba Caído, reactivarlo a Recuperación (C90:8) y limpiar checkpoint
             try:
                 deal_data = await bx.get_deal(deal_id)
                 if deal_data.get("STAGE_ID") == "C90:LOSE":
-                    await bx.mover_etapa(deal_id, "C90:8")
+                    await bx.mover_etapa(deal_id, "C90:PREPAYMENT_INVOIC")
+                    # Borrar estado LangGraph para que la conversación empiece limpia
+                    await db.execute("DELETE FROM checkpoints WHERE thread_id = $1", phone)
+                    await db.execute("DELETE FROM checkpoint_blobs WHERE thread_id = $1", phone)
+                    await db.execute("DELETE FROM checkpoint_writes WHERE thread_id = $1", phone)
                     logger.info("bitrix_deal_reactivado", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
             except Exception as exc:
                 logger.warning("bitrix_reactivacion_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
@@ -638,13 +642,10 @@ async def validacion_node(state: PortabilidadState) -> dict:
     if not messages:
         return {}
 
-    # Reactivar bot solo si el deal está cerrado (WON/LOSE) — indica conversación nueva.
-    # Si el deal está en escalamiento humano activo (UC_8WB2DT), mantener el bot pausado.
     phone = state.get("customer_phone") or state.get("session_id") or ""
     if phone:
         try:
             from integrations.redis_client import get_redis
-            from integrations.postgres import client as db
             redis = await get_redis()
             row = await db.fetchrow(
                 "SELECT bitrix_stage FROM leads WHERE telefono = $1", phone
@@ -652,6 +653,16 @@ async def validacion_node(state: PortabilidadState) -> dict:
             stage = row["bitrix_stage"] if row else ""
             if stage in ("C90:WON", "C90:LOSE"):
                 await redis.delete(f"bot_pausado:{phone}")
+
+            # Si el deal está en Caído y ya tenemos deal_id, moverlo a Recuperación
+            deal_id = state.get("bitrix_lead_id") or ""
+            if stage == "C90:LOSE" and deal_id:
+                try:
+                    from integrations.bitrix.client import BitrixClient
+                    await BitrixClient().mover_etapa(deal_id, "C90:PREPAYMENT_INVOIC")
+                    logger.info("deal_reactivado_desde_validacion", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
+                except Exception as exc:
+                    logger.warning("deal_reactivacion_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
         except Exception:
             pass
 

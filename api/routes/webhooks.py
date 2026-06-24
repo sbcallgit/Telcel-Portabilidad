@@ -140,7 +140,8 @@ async def receive_message(request: Request) -> dict:
 
     _asyncio.create_task(_log_usuario())
 
-    # Guard: si el bot está pausado para este número, el asesor gestiona el chat
+    # Guard: si el bot está pausado para este número, el asesor gestiona el chat.
+    # Nota: job_bitrix_sync limpia bot_pausado automáticamente cuando el deal pasa a C90:LOSE.
     bot_pausado_key = f"bot_pausado:{phone}"
     if await redis.get(bot_pausado_key):
         logger.info("webhook_bot_pausado", extra={"phone_tail": phone[-4:]})

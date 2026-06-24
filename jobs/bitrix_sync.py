@@ -76,7 +76,7 @@ async def job_bitrix_sync() -> None:
     try:
         rows = await db.fetch(
             """
-            SELECT id, bitrix_lead_id, bitrix_stage
+            SELECT id, telefono, bitrix_lead_id, bitrix_stage
             FROM leads
             WHERE bitrix_lead_id != ''
             ORDER BY updated_at DESC
@@ -104,6 +104,9 @@ async def job_bitrix_sync() -> None:
     actualizados = 0
     errores = 0
     capi_tasks = []
+    # Mapa lead_id → telefono para limpiar bot_pausado cuando el deal pasa a Caído
+    telefono_map = {row["id"]: row.get("telefono", "") for row in rows}
+
     for lead_id, stage in resultados:
         if not stage:
             errores += 1
@@ -114,9 +117,24 @@ async def job_bitrix_sync() -> None:
                 stage, lead_id,
             )
             actualizados += 1
-            # Disparar CAPI en background si el stage cambió a WON o PROSPECTO
             stage_prev = stage_anterior_map.get(lead_id, "")
-            if stage != stage_prev and stage in ("C90:WON", "C90:PROSPECTO"):
+            if stage == stage_prev:
+                continue
+
+            # Si el deal pasó a Caído, liberar bot_pausado para que pueda reactivarse
+            if stage == "C90:LOSE":
+                telefono = telefono_map.get(lead_id, "")
+                if telefono:
+                    try:
+                        from integrations.redis_client import get_redis
+                        redis = await get_redis()
+                        await redis.delete(f"bot_pausado:{telefono}")
+                        logger.info("bot_pausado_cleared_on_lose", extra={"phone_tail": telefono[-4:], "lead_id": lead_id})
+                    except Exception as exc:
+                        logger.warning("bot_pausado_clear_error", extra={"lead_id": lead_id, "error": str(exc)})
+
+            # Disparar CAPI en background si el stage cambió a WON o PROSPECTO
+            if stage in ("C90:WON", "C90:PROSPECTO"):
                 capi_tasks.append(_fire_capi_if_needed(lead_id, stage, stage_prev))
         except Exception as exc:
             errores += 1
