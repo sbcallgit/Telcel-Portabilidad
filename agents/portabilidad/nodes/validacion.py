@@ -37,6 +37,11 @@ _SEGUIMIENTO = [
     "me comunico después", "me comunico despues", "ya me comunico",
     "cuando pueda", "cuando esté listo", "cuando este listo",
 ]
+_TELCEL_TELCEL = [
+    "ya soy de telcel", "tengo telcel", "soy cliente de telcel", "ya tengo telcel",
+    "soy de telcel", "ya soy telcel", "estoy en telcel", "soy usuario de telcel",
+    "mi línea es telcel", "mi linea es telcel", "ya tengo una línea telcel",
+]
 _POSPAGO = [
     "renta mensual", "plan pospago", "pospago", "postpago", "contrato mensual",
     "plan de renta", "plan con contrato", "factura mensual", "cambiar a pospago",
@@ -299,6 +304,17 @@ async def _validacion_logic(state: PortabilidadState, messages: list) -> dict:
             "messages": [AIMessage(content="Claro, ahora mismo te conecto con un asesor. ¿Me dices tu nombre?")],
             "escalate_to_human": True,
             "motivo_escalacion": "solicitud_directa",
+        }
+
+    # Telcel → Telcel (ya es cliente, no es portabilidad)
+    if any(p in lower for p in _TELCEL_TELCEL):
+        return {
+            "messages": [AIMessage(content=(
+                "Si ya eres cliente de Telcel, lo que necesitas es un cambio de plan o soporte, "
+                "no una portabilidad. Te conecto con un asesor que puede ayudarte directamente 😊"
+            ))],
+            "escalate_to_human": True,
+            "motivo_escalacion": "telcel_a_telcel",
         }
 
     # Pospago → derivar a CAC presencial
