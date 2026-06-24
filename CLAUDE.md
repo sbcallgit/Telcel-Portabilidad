@@ -244,7 +244,7 @@ El pipeline usa `crm.deal.*` con `CATEGORY_ID=90`. Las etapas siguen el formato 
 | Venta | `C90:WON` | Solo leads con Venta Exitosa | Manual por el asesor |
 | Rescate 1 | `C90:1` | Primer seguimiento enviado | `job_seguimientos` tras 30 min de silencio del usuario |
 | Rescate 2 | `C90:2` | Segundo seguimiento enviado | `job_seguimientos` 60 min después de Rescate 1 (solo a `C90:1`) |
-| Rescate 3 | `C90:3` | Llamada automática vía Vicidial | `job_seguimientos` 60 min después de Rescate 2 (solo a `C90:2`) |
+| Rescate 3 | `C90:3` | Llamada automática vía Vicidial | `job_seguimientos` 120 min después de Rescate 2 (solo a `C90:2`) |
 | Recuperación | `C90:8` | Lead a reactivar | Regla automática Bitrix (24h sin avance) |
 | Caído | `C90:LOSE` | Lead perdido (con tipificación) | Manual por el asesor |
 
@@ -420,8 +420,8 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **Versiones de prompt:** editar los archivos en `prompts/` directamente. Para historial de versiones usar git. La carpeta `knowledge/prompts/` es para specs de auditoría, no para los prompts activos.
 - **APScheduler:** corre dentro del proceso FastAPI (lifespan). Jobs activos: `bitrix_sync` (cada 30 min), `kpi_export` (cron 3am Monterrey) y `job_seguimientos` (cada 5 min, L-S 9am–9pm). El scheduler se inicia en `api/main.py` con `create_scheduler().start()` y se apaga con `scheduler.shutdown(wait=False)`.
 - **`SEGUIMIENTOS_TEST_PHONE`:** cuando está definido en `.env`, `job_seguimientos` solo procesa ese teléfono (modo validación). Para producción general dejar vacío (`SEGUIMIENTOS_TEST_PHONE=`) y hacer rebuild. Actualmente activo con el teléfono de prueba `593991053639`.
-- **Lógica Rescate 1 simplificada:** `_procesar_lead` ya no usa cadencias por stage. Condiciones: 30+ min de silencio del usuario **y** `seguimientos_enviados < MAX_SEGUIMIENTOS` (5). Aplica a cualquier stage excepto `C90:WON`, `C90:1`, `C90:2`, `C90:3`. El filtro SQL usa `$1` como único parámetro cuando `SEGUIMIENTOS_TEST_PHONE` está activo (antes usaba `$2` causando error de BD).
-- **Bug seguimientos ilimitados (resuelto):** `_procesar_lead` no chequeaba `MAX_SEGUIMIENTOS`. La constante existía pero solo la usaba `_siguiente_envio()`, función que nunca se invoca (código muerto de versión anterior). Combinado con que `job_bitrix_sync` sobreescribe `bitrix_stage` desde Bitrix cada 30 min (ej. `C90:LOSE` no está excluido de la query R1), un lead podía recibir un seguimiento en cada ciclo de 5 min indefinidamente. Fix: guardia `if num_enviados >= MAX_SEGUIMIENTOS: return` al inicio de `_procesar_lead`. `_siguiente_envio()` y `_cadencia()` son código muerto — no borrarlos sin reemplazar la lógica de cadencias si se quiere reactivar.
+- **Lógica Rescate 1 simplificada:** `_procesar_lead` no usa cadencias por stage. Condiciones para enviar: (1) 30+ min de silencio del usuario (checkpoint LangGraph), (2) 30+ min desde el último seguimiento enviado (`leads.ultimo_seguimiento`), (3) `seguimientos_enviados < MAX_SEGUIMIENTOS` (5). Ambas condiciones de tiempo deben cumplirse — la segunda evita spam entre ciclos de 5 min cuando el usuario no responde. Aplica a cualquier stage excepto `C90:WON`, `C90:LOSE`, `C90:1`, `C90:2`, `C90:3`. El filtro SQL usa `$1` como único parámetro cuando `SEGUIMIENTOS_TEST_PHONE` está activo.
+- **Bug seguimientos ilimitados (resuelto):** dos correcciones acumuladas: (a) guardia `if num_enviados >= MAX_SEGUIMIENTOS: return` al inicio de `_procesar_lead`; (b) gate de 30 min sobre `leads.ultimo_seguimiento` — sin este gate, el bot podía enviar hasta 5 mensajes en ~25 min porque los seguimientos no generan checkpoints LangGraph y el timer de silencio del usuario nunca avanzaba. Las variables `_CADENCIAS`, `_CADENCIA_DEFAULT`, `_cadencia()` y `_siguiente_envio()` (código muerto de versión anterior con cadencias por stage) fueron eliminadas.
 - **Jobs timezone:** siempre `America/Monterrey` explícito. El horario de portabilidad es L-S 9am–9pm; sin domingos.
 - **Debounce:** configurar `DEBOUNCE_WINDOW_MS` en `.env`. Valor actual en producción: `10000` ms (10s). Poner `0` solo en pruebas unitarias o entornos donde cada mensaje debe procesarse de forma independiente.
 - **Telegram:** canal de pruebas que corre el mismo agente y el mismo debounce que WhatsApp. El `thread_id` de LangGraph es `str(chat_id)` en Telegram y `phone` en WhatsApp. El `phone` en Telegram tiene prefijo `tg_` (ej. `tg_8211184685`).
@@ -492,7 +492,7 @@ lead en C90:2
 
 ### Exclusiones de Rescate 1
 
-No se envía Rescate 1 a deals cuyo `bitrix_stage` esté en: `C90:WON`, `C90:1`, `C90:2`, `C90:3`.
+No se envía Rescate 1 a deals cuyo `bitrix_stage` esté en: `C90:WON`, `C90:LOSE`, `C90:1`, `C90:2`, `C90:3`.
 
 ### Exclusiones de Rescate 2
 
