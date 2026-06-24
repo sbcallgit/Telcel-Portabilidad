@@ -61,12 +61,12 @@ class BitrixClient:
             logger.info("bitrix_deal_encontrado", extra={"phone_tail": tail, "deal_id": deal_id, "source": "openlines"})
             return deal_id
 
-        # Fallback: cualquier deal activo con ese teléfono (no ganado/perdido)
+        # Fallback: cualquier deal activo con ese teléfono (excluye solo WON — Caído se reactiva)
         result2 = await self._call("crm.deal.list", {
             "filter": {
                 "CATEGORY_ID": settings.bitrix_pipeline_id,
                 "%TITLE": f"*{tail}",
-                "!=STAGE_ID": ["C90:WON", "C90:LOSE"],
+                "!=STAGE_ID": ["C90:WON"],
             },
             "order": {"DATE_CREATE": "DESC"},
             "select": ["ID", "STAGE_ID", "TITLE"],
@@ -75,7 +75,8 @@ class BitrixClient:
         items2 = result2.get("result", [])
         if items2:
             deal_id = str(items2[0]["ID"])
-            logger.info("bitrix_deal_encontrado", extra={"phone_tail": tail, "deal_id": deal_id, "source": "fallback"})
+            stage  = items2[0].get("STAGE_ID", "")
+            logger.info("bitrix_deal_encontrado", extra={"phone_tail": tail, "deal_id": deal_id, "source": "fallback", "stage": stage})
             return deal_id
 
         return ""

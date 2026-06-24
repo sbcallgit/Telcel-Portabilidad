@@ -263,9 +263,18 @@ async def _crear_deal_primer_contacto(state: PortabilidadState) -> dict:
             deal_id = str(result.get("result", ""))
             logger.info("bitrix_deal_creado_fallback", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
         else:
-            # Deal existente (Open Lines) — vincular contacto en background si aún no tiene uno
+            # Deal existente — vincular contacto en background si aún no tiene uno
             import asyncio
             asyncio.create_task(bx.link_contact_to_deal(deal_id, phone))
+
+            # Si el deal estaba Caído, reactivarlo a Recuperación (C90:8)
+            try:
+                deal_data = await bx.get_deal(deal_id)
+                if deal_data.get("STAGE_ID") == "C90:LOSE":
+                    await bx.mover_etapa(deal_id, "C90:8")
+                    logger.info("bitrix_deal_reactivado", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
+            except Exception as exc:
+                logger.warning("bitrix_reactivacion_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
 
         if deal_id:
             return {"bitrix_lead_id": deal_id, "bitrix_etapa": "ia_porta"}

@@ -206,28 +206,51 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
       if (s.stage === 'C90:NEW')  return '#e8001d';
       return '#3b82f6';
     });
+    // Tasa de conversión acumulada vs el primer stage
+    const convRates = stages.map(s => max > 0 ? +((s.total / max) * 100).toFixed(1) : 0);
+
+    // Usamos barras verticales para compatibilidad natural con línea de tasa
     this.funnelChart = new Chart(this.funnelChartRef.nativeElement, {
-      type: 'bar',
       data: {
         labels: stages.map(s => s.label),
-        datasets: [{
-          label: 'Deals',
-          data: stages.map(s => s.total),
-          backgroundColor: colors,
-          borderRadius: 5,
-          borderSkipped: false,
-        }],
+        datasets: [
+          {
+            type: 'bar' as const,
+            label: 'Deals',
+            data: stages.map(s => s.total),
+            backgroundColor: colors,
+            borderRadius: 5,
+            borderSkipped: false,
+            yAxisID: 'yDeals',
+            order: 2,
+          },
+          {
+            type: 'line' as const,
+            label: '% conversión',
+            data: convRates,
+            borderColor: '#f59e0b',
+            backgroundColor: 'rgba(245,158,11,0.08)',
+            pointBackgroundColor: '#f59e0b',
+            pointRadius: 4,
+            tension: 0.3,
+            yAxisID: 'yRate',
+            order: 1,
+          },
+        ],
       },
       options: {
-        indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
         plugins: {
-          legend: { display: false },
+          legend: { position: 'top', labels: { font: { family: 'Inter', size: 12 } } },
           tooltip: {
             callbacks: {
               label: (ctx) => {
-                const val = ctx.parsed.x ?? 0;
+                if (ctx.dataset.label === '% conversión') {
+                  return ` Conversión: ${ctx.parsed.y}%`;
+                }
+                const val = ctx.parsed.y ?? 0;
                 const pct = max > 0 ? ((val / max) * 100).toFixed(1) : '0';
                 const stage = stages[ctx.dataIndex];
                 const avg = stage?.avg_fmt ? ` · prom. ${stage.avg_fmt}` : '';
@@ -237,15 +260,24 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
           },
         },
         scales: {
-          x: {
+          yDeals: {
+            type: 'linear',
+            position: 'left',
             beginAtZero: true,
-            max,
             grid: { color: '#f1f5f9' },
             ticks: { font: { family: 'Inter' } },
           },
-          y: {
+          yRate: {
+            type: 'linear',
+            position: 'right',
+            beginAtZero: true,
+            max: 100,
             grid: { display: false },
-            ticks: { font: { family: 'Inter', size: 12 } },
+            ticks: { font: { family: 'Inter' }, callback: (v) => `${v}%` },
+          },
+          x: {
+            grid: { display: false },
+            ticks: { font: { family: 'Inter', size: 11 }, maxRotation: 30 },
           },
         },
       },
@@ -408,51 +440,57 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   private renderMetaChart(): void {
     if (!this.metaData || !this.metaSpendChartRef) return;
     this.metaSpendChart?.destroy();
-    const rows = this.metaData.rows.slice(0, 8);
-    const labels = rows.map(r => r.campaign_name.length > 28 ? r.campaign_name.slice(0, 28) + '…' : r.campaign_name);
+    const rows = this.metaData.rows.slice(0, 10);
+    // Barras horizontales: nombres completos en eje Y sin truncar
     this.metaSpendChart = new Chart(this.metaSpendChartRef.nativeElement, {
       type: 'bar',
       data: {
-        labels,
+        labels: rows.map(r => r.campaign_name),
         datasets: [
           {
             label: 'Gasto (MXN)',
             data: rows.map(r => r.spend),
             backgroundColor: '#e8001d',
-            borderRadius: 5,
+            borderRadius: 4,
             borderSkipped: false,
-            yAxisID: 'ySpend',
+            xAxisID: 'xSpend',
           },
           {
             label: 'Convs. WhatsApp',
             data: rows.map(r => r.wa_conversaciones),
             backgroundColor: '#10b981',
-            borderRadius: 5,
+            borderRadius: 4,
             borderSkipped: false,
-            yAxisID: 'yConvs',
+            xAxisID: 'xConvs',
           },
         ],
       },
       options: {
+        indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
         plugins: { legend: { position: 'top', labels: { font: { family: 'Inter', size: 12 } } } },
         scales: {
-          ySpend: {
+          xSpend: {
+            axis: 'x',
             type: 'linear',
-            position: 'left',
+            position: 'bottom',
             beginAtZero: true,
             grid: { color: '#f1f5f9' },
+            title: { display: true, text: 'Gasto MXN', font: { family: 'Inter', size: 11 } },
             ticks: { font: { family: 'Inter' }, callback: (v) => `$${v}` },
           },
-          yConvs: {
+          xConvs: {
+            axis: 'x',
             type: 'linear',
-            position: 'right',
+            position: 'top',
             beginAtZero: true,
             grid: { display: false },
+            title: { display: true, text: 'Convs. WhatsApp', font: { family: 'Inter', size: 11 } },
             ticks: { font: { family: 'Inter' } },
           },
-          x: { grid: { display: false }, ticks: { font: { family: 'Inter', size: 11 }, maxRotation: 30 } },
+          y: { grid: { display: false }, ticks: { font: { family: 'Inter', size: 11 } } },
         },
       },
     });
@@ -663,6 +701,8 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
       '#8b5cf6','#ec4899','#14b8a6','#f97316','#6366f1','#64748b',
     ];
 
+    // 1. Doughnut con % y cantidad en leyenda y tooltip
+    const totalStage = this.porStage.reduce((s, r) => s + r.cantidad, 0);
     this.stageChart = new Chart(this.stageChartRef.nativeElement, {
       type: 'doughnut',
       data: {
@@ -678,35 +718,114 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { position: 'right', labels: { font: { family: 'Inter', size: 12 }, padding: 12 } },
+          legend: {
+            position: 'right',
+            labels: {
+              font: { family: 'Inter', size: 12 },
+              padding: 12,
+              generateLabels: (chart) => {
+                const ds = chart.data.datasets[0];
+                const bg = ds.backgroundColor as string[];
+                return (chart.data.labels as string[]).map((label, i) => {
+                  const val = ds.data[i] as number;
+                  const pct = totalStage > 0 ? ((val / totalStage) * 100).toFixed(1) : '0';
+                  return {
+                    text: `${label}: ${val} (${pct}%)`,
+                    fillStyle: bg[i],
+                    strokeStyle: '#fff',
+                    lineWidth: 2,
+                    hidden: false,
+                    index: i,
+                  };
+                });
+              },
+            },
+          },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const val = ctx.parsed ?? 0;
+                const pct = totalStage > 0 ? ((val / totalStage) * 100).toFixed(1) : '0';
+                return ` ${val} deals (${pct}%)`;
+              },
+            },
+          },
         },
         cutout: '60%',
       },
     });
 
+    // 2. Mensajes por actor: totales + promedio por conversación
     if (this.resumen) {
+      const totalConvs = this.resumen.total_conversaciones || 1;
+      const msgTotales = [
+        this.resumen.total_msgs_cliente,
+        this.resumen.total_msgs_bot,
+        this.resumen.total_msgs_humano,
+      ];
+      const msgPromedios = msgTotales.map(v => +(v / totalConvs).toFixed(1));
+
       this.msgChart = new Chart(this.msgChartRef.nativeElement, {
         type: 'bar',
         data: {
           labels: ['Cliente', 'Bot (Vera)', 'Asesor Humano'],
-          datasets: [{
-            label: 'Mensajes totales',
-            data: [
-              this.resumen.total_msgs_cliente,
-              this.resumen.total_msgs_bot,
-              this.resumen.total_msgs_humano,
-            ],
-            backgroundColor: ['#3b82f6', '#e8001d', '#10b981'],
-            borderRadius: 6,
-            borderSkipped: false,
-          }],
+          datasets: [
+            {
+              label: 'Total mensajes',
+              data: msgTotales,
+              backgroundColor: ['#3b82f6', '#e8001d', '#10b981'],
+              borderRadius: 6,
+              borderSkipped: false,
+              yAxisID: 'yTotal',
+              order: 2,
+            },
+            {
+              label: 'Prom. por conversación',
+              data: msgPromedios,
+              type: 'line' as const,
+              borderColor: '#f59e0b',
+              backgroundColor: 'rgba(245,158,11,0.12)',
+              pointBackgroundColor: '#f59e0b',
+              tension: 0.3,
+              yAxisID: 'yProm',
+              order: 1,
+            },
+          ],
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          plugins: { legend: { display: false } },
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'top', labels: { font: { family: 'Inter', size: 12 } } },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  if (ctx.dataset.yAxisID === 'yProm') {
+                    return ` Prom/conv: ${ctx.parsed.y}`;
+                  }
+                  return ` Total: ${ctx.parsed.y}`;
+                },
+              },
+            },
+          },
           scales: {
-            y: { beginAtZero: true, grid: { color: '#f1f5f9' }, ticks: { font: { family: 'Inter' } } },
+            yTotal: {
+              type: 'linear',
+              position: 'left',
+              beginAtZero: true,
+              grid: { color: '#f1f5f9' },
+              title: { display: true, text: 'Total', font: { family: 'Inter', size: 11 } },
+              ticks: { font: { family: 'Inter' } },
+            },
+            yProm: {
+              type: 'linear',
+              position: 'right',
+              beginAtZero: true,
+              grid: { display: false },
+              title: { display: true, text: 'Promedio', font: { family: 'Inter', size: 11 } },
+              ticks: { font: { family: 'Inter' } },
+            },
             x: { grid: { display: false }, ticks: { font: { family: 'Inter' } } },
           },
         },
