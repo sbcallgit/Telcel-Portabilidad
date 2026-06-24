@@ -232,12 +232,37 @@ class BitrixClient:
         logger.info("bitrix_userfield_created", extra={"field": full_name})
 
     async def ensure_custom_fields(self) -> None:
-        """Crea los campos personalizados del bot en deals si no existen."""
+        """Crea los campos personalizados del bot en deals y los agrega al layout si no existen."""
         try:
             await self._ensure_one_userfield("MOTIVO_ESCALAMIENTO_HUMANO", "Motivo de Escalamiento")
             await self._ensure_one_userfield("RESUMEN_CONVERSACION", "Resumen de Conversación")
+            await self._ensure_layout_fields()
         except Exception as exc:
             logger.warning("bitrix_ensure_fields_error", extra={"error": str(exc)})
+
+    async def _ensure_layout_fields(self) -> None:
+        """Agrega los campos del bot a la vista del deal (sección Bot Telcel) si no están."""
+        campos = [_UF_MOTIVO_ESCALAMIENTO, _UF_RESUMEN_CONVERSACION]
+        result = await self._call("crm.deal.details.configuration.get", {
+            "scope": "C",
+            "data": {"categoryId": settings.bitrix_pipeline_id},
+        })
+        sections = result.get("result", [])
+        existing = {el["name"] for s in sections for el in s.get("elements", [])}
+        nuevos = [c for c in campos if c not in existing]
+        if not nuevos:
+            return
+        sections.append({
+            "name": "section_bot_telcel",
+            "title": "Bot Telcel",
+            "type": "section",
+            "elements": [{"name": c, "optionFlags": "0"} for c in campos],
+        })
+        await self._call("crm.deal.details.configuration.set", {
+            "scope": "C",
+            "data": sections,
+        })
+        logger.info("bitrix_layout_updated", extra={"fields_added": nuevos})
 
     async def set_campos_escalamiento(self, deal_id: str, motivo: str, resumen: str) -> None:
         """Puebla motivo y resumen de conversación en el deal al escalar."""
