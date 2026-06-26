@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
+from config.settings import settings
 from integrations.bitrix.oauth import exchange_code
 from integrations.postgres import client as db
 
@@ -320,3 +321,304 @@ async def bitrix_stage_event(request: Request) -> dict:
     ))
 
     return {"status": "ok", "deal_id": deal_id, "stage": stage_id, "duracion": duracion_fmt or None}
+
+
+# ---------------------------------------------------------------------------
+# Embed CRM — pestaña del deal
+# ---------------------------------------------------------------------------
+
+def _html_embed(deal_id: str, summary: dict | None, totales: dict, eventos: list[dict]) -> str:
+    """Genera HTML self-contained para incrustar en la pestaña del deal de Bitrix24."""
+    from datetime import timezone as _tz
+
+    def _fmt_dt(iso: str | None) -> str:
+        if not iso:
+            return "—"
+        try:
+            from datetime import datetime as _dt
+            d = _dt.fromisoformat(iso.replace("Z", "+00:00"))
+            d = d.astimezone(_tz.utc)
+            return d.strftime("%d/%m %H:%M:%S")
+        except Exception:
+            return iso[:16]
+
+    def _fmt_secs(s) -> str:
+        if s is None:
+            return "—"
+        try:
+            s = int(s)
+        except Exception:
+            return "—"
+        if s < 60:
+            return f"{s}s"
+        m, s = divmod(s, 60)
+        if m < 60:
+            return f"{m}m {s:02d}s"
+        h, m = divmod(m, 60)
+        return f"{h}h {m:02d}m"
+
+    actor_badge = {
+        "usuario": ('<span style="background:#dbeafe;color:#1e40af;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600">Usuario</span>'),
+        "bot":     ('<span style="background:#fee2e2;color:#991b1b;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600">Bot</span>'),
+        "humano":  ('<span style="background:#fef3c7;color:#92400e;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600">Asesor</span>'),
+        "sistema": ('<span style="background:#f1f5f9;color:#475569;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:600">Sistema</span>'),
+    }
+
+    mensajes = [e for e in eventos if e.get("tipo_actor") != "sistema"]
+    transiciones = [e for e in eventos if e.get("tipo_actor") == "sistema"]
+
+    # ── Cards HTML ────────────────────────────────────────────────────────
+    cards_html = f"""
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
+      <div style="background:#fff;border-radius:10px;padding:12px 14px;border-top:3px solid #e8001d;box-shadow:0 1px 3px rgba(0,0,0,.07)">
+        <div style="font-size:11px;color:#64748b;margin-bottom:4px">Mensajes Bot</div>
+        <div style="font-size:22px;font-weight:700">{totales.get('mensajes_bot', 0)}</div>
+      </div>
+      <div style="background:#fff;border-radius:10px;padding:12px 14px;border-top:3px solid #3b82f6;box-shadow:0 1px 3px rgba(0,0,0,.07)">
+        <div style="font-size:11px;color:#64748b;margin-bottom:4px">Mensajes Usuario</div>
+        <div style="font-size:22px;font-weight:700">{totales.get('mensajes_usuario', 0)}</div>
+      </div>
+      <div style="background:#fff;border-radius:10px;padding:12px 14px;border-top:3px solid #f59e0b;box-shadow:0 1px 3px rgba(0,0,0,.07)">
+        <div style="font-size:11px;color:#64748b;margin-bottom:4px">Mensajes Asesor</div>
+        <div style="font-size:22px;font-weight:700">{totales.get('mensajes_humano', 0)}</div>
+      </div>
+      <div style="background:#fff;border-radius:10px;padding:12px 14px;border-top:3px solid #10b981;box-shadow:0 1px 3px rgba(0,0,0,.07)">
+        <div style="font-size:11px;color:#64748b;margin-bottom:4px">Costo Total (USD)</div>
+        <div style="font-size:22px;font-weight:700">${totales.get('costo_total_usd', 0):.4f}</div>
+        <div style="font-size:10px;color:#94a3b8;margin-top:2px">{totales.get('tokens_entrada_total',0):,}↑ {totales.get('tokens_salida_total',0):,}↓ tokens</div>
+      </div>
+    </div>"""
+
+    # ── Resumen ───────────────────────────────────────────────────────────
+    resumen_html = ""
+    if summary and summary.get("resumen"):
+        motivo = f'<span style="font-size:11px;color:#94a3b8;margin-top:4px;display:block">Motivo escalamiento: <strong style="color:#64748b">{summary["motivo_escalacion"]}</strong></span>' if summary.get("motivo_escalacion") else ""
+        resumen_html = f"""
+    <div style="background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:8px">Resumen</div>
+      <p style="color:#475569;line-height:1.6;margin:0;font-size:13px">{summary['resumen']}</p>
+      {motivo}
+    </div>"""
+
+    # ── Tabla de mensajes ─────────────────────────────────────────────────
+    rows = ""
+    for e in mensajes:
+        actor = e.get("tipo_actor", "")
+        badge = actor_badge.get(actor, actor)
+        costo = f'<span style="color:#10b981;font-size:11px;font-weight:600">${e["costo_usd"]:.4f}</span>' if e.get("costo_usd") is not None else ""
+        tokens = f'<span style="color:#94a3b8;font-size:10px">{e.get("tokens_entrada",0):,}↑ {e.get("tokens_salida",0):,}↓</span>' if e.get("tokens_entrada") is not None else ""
+        texto = str(e.get("texto") or "").replace("<", "&lt;").replace(">", "&gt;")
+        rows += f"""<tr>
+          <td style="padding:5px 8px;color:#64748b;font-size:11px;white-space:nowrap">{_fmt_dt(e.get('fecha_evento'))}</td>
+          <td style="padding:5px 8px">{badge}</td>
+          <td style="padding:5px 8px;font-size:12px;line-height:1.5;max-width:480px;word-break:break-word">{texto}</td>
+          <td style="padding:5px 8px;white-space:nowrap">{costo}</td>
+          <td style="padding:5px 8px;white-space:nowrap">{tokens}</td>
+        </tr>"""
+
+    msgs_count = len(mensajes)
+    msgs_html = f"""
+    <div style="background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.07)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">Mensajes ({msgs_count})</div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="border-bottom:1px solid #e2e8f0">
+              <th style="text-align:left;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;padding:5px 8px;white-space:nowrap">Hora</th>
+              <th style="text-align:left;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;padding:5px 8px">Actor</th>
+              <th style="text-align:left;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;padding:5px 8px">Mensaje</th>
+              <th style="text-align:left;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;padding:5px 8px">Costo</th>
+              <th style="text-align:left;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;padding:5px 8px">Tokens</th>
+            </tr>
+          </thead>
+          <tbody>{rows or '<tr><td colspan="5" style="text-align:center;padding:16px;color:#94a3b8;font-style:italic">Sin mensajes registrados</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>"""
+
+    # ── Pipeline ──────────────────────────────────────────────────────────
+    pipeline_html = ""
+    if transiciones:
+        cards_pip = ""
+        for i, t in enumerate(transiciones):
+            if i == 0 and t.get("stage_anterior"):
+                cards_pip += f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;min-width:110px"><div style="font-size:11px;font-weight:700">{_STAGE_NOMBRES.get(t["stage_anterior"], t.get("stage_anterior_nombre") or t["stage_anterior"])}</div><div style="font-size:10px;color:#94a3b8">Inicio</div></div><div style="padding:0 6px;color:#94a3b8;font-size:16px;line-height:38px">→</div>'
+            dur_html = f'<div style="font-size:10px;color:#94a3b8;margin-top:2px">← {t["duracion_formateada"]}</div>' if t.get("duracion_formateada") else ""
+            stage_label = _STAGE_NOMBRES.get(t.get("stage_id", ""), t.get("stage_nombre") or t.get("stage_id", ""))
+            cards_pip += f'<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;min-width:110px"><div style="font-size:11px;font-weight:700">{stage_label}</div><div style="font-size:10px;color:#64748b">{_fmt_dt(t.get("fecha_evento"))}</div>{dur_html}</div>'
+            if i < len(transiciones) - 1:
+                cards_pip += '<div style="padding:0 6px;color:#94a3b8;font-size:16px;line-height:38px">→</div>'
+        pipeline_html = f"""
+    <div style="background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 3px rgba(0,0,0,.07)">
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">Pipeline ({len(transiciones)} transiciones)</div>
+      <div style="display:flex;flex-wrap:nowrap;overflow-x:auto;gap:0;align-items:flex-start;padding-bottom:6px">{cards_pip}</div>
+    </div>"""
+
+    telefono = (summary or {}).get("telefono") or deal_id
+    stage_actual = _STAGE_NOMBRES.get((summary or {}).get("estado_actual", ""), (summary or {}).get("estado_actual") or "")
+    primer_msg = _fmt_dt((summary or {}).get("creado_el"))
+    t1r = _fmt_secs((summary or {}).get("tiempo_primera_respuesta_segs"))
+    asesor = (summary or {}).get("empleado") or "—"
+
+    return f"""<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Conversación {telefono}</title>
+<style>*{{box-sizing:border-box;margin:0;padding:0}}body{{font-family:Inter,system-ui,sans-serif;background:#f4f6f9;color:#1a202c;font-size:13px;padding:14px}}</style>
+</head><body>
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+  <div>
+    <h1 style="font-size:16px;font-weight:700">{telefono}</h1>
+    <p style="font-size:12px;color:#64748b">
+      Etapa: <strong>{stage_actual}</strong>
+      · Asesor: <strong>{asesor}</strong>
+      · Primer mensaje: {primer_msg}
+      · 1ª respuesta bot: {t1r}
+    </p>
+  </div>
+</div>
+{cards_html}
+{resumen_html}
+{msgs_html}
+{pipeline_html}
+</body></html>"""
+
+
+@router.post("/bitrix/deal-embed", response_class=HTMLResponse)
+async def bitrix_deal_embed(request: Request) -> str:
+    """Placement handler para la pestaña del deal en Bitrix24.
+
+    Bitrix POST fields:
+      AUTH_ID           → access token del usuario que abre la pestaña
+      DOMAIN            → dominio del portal (b24-ahyle8.bitrix24.mx)
+      PLACEMENT_OPTIONS → JSON: {"ID": "<deal_id>"}
+    """
+    import json as _json
+    from urllib.parse import parse_qs
+
+    body = await request.body()
+    raw = parse_qs(body.decode("utf-8", errors="ignore"), keep_blank_values=True)
+    def _f(key: str, default: str = "") -> str:
+        vals = raw.get(key, [])
+        return vals[0] if vals else default
+
+    auth_id  = _f("AUTH_ID")
+    domain   = _f("DOMAIN")
+    opts_raw = _f("PLACEMENT_OPTIONS", "{}")
+
+    try:
+        opts = _json.loads(opts_raw) if isinstance(opts_raw, str) else {}
+    except Exception:
+        opts = {}
+
+    deal_id = str(opts.get("ID", "")).strip()
+
+    if not deal_id:
+        return "<body style='font-family:sans-serif;padding:20px'><p style='color:#991b1b'>No se recibió deal_id en PLACEMENT_OPTIONS.</p></body>"
+
+    # Validar el token de Bitrix (llamada ligera a profile)
+    if auth_id and domain:
+        try:
+            async with __import__("httpx").AsyncClient(timeout=5) as hx:
+                r = await hx.get(f"https://{domain}/rest/profile.json", params={"auth": auth_id})
+                if r.status_code != 200 or r.json().get("error"):
+                    logger.warning("bitrix_embed_auth_invalid", extra={"deal_id": deal_id})
+                    return "<body style='font-family:sans-serif;padding:20px'><p style='color:#991b1b'>Token de Bitrix inválido o expirado.</p></body>"
+        except Exception as exc:
+            logger.warning("bitrix_embed_auth_check_failed", extra={"error": str(exc)})
+            # Si la validación falla por red, continuamos (mejor mostrar datos que bloquear)
+
+    # Buscar id_conversacion desde leads (más confiable: teléfono → id_conversacion)
+    lead_row = await db.fetchrow(
+        "SELECT telefono FROM leads WHERE bitrix_lead_id = $1",
+        deal_id,
+    )
+    id_conversacion: str | None = None
+    if lead_row:
+        id_conversacion = lead_row["telefono"]
+    else:
+        # Fallback: buscar directo en bitrix_eventos
+        ev_row = await db.fetchrow(
+            "SELECT id_conversacion FROM bitrix_eventos WHERE deal_id = $1 AND id_conversacion != deal_id LIMIT 1",
+            deal_id,
+        )
+        if ev_row:
+            id_conversacion = ev_row["id_conversacion"]
+        else:
+            id_conversacion = deal_id  # último fallback: deal_id = id_conversacion (Open Lines)
+
+    # Resumen desde kpi_conversaciones
+    summary_row = await db.fetchrow(
+        """SELECT id_conversacion, telefono, estado_actual, etapa, empleado,
+                  creado_el, cerrado_el, resumen, motivo_escalacion,
+                  tiempo_primera_respuesta_segs, tiempo_cierre_segs
+           FROM kpi_conversaciones WHERE id_conversacion = $1""",
+        id_conversacion,
+    )
+
+    # Totales + eventos desde bitrix_eventos
+    totales_row = await db.fetchrow(
+        """SELECT
+               COALESCE(SUM(costo_usd) FILTER (WHERE tipo_actor = 'bot'), 0)     AS costo_total_usd,
+               COALESCE(SUM(tokens_entrada) FILTER (WHERE tipo_actor = 'bot'), 0) AS tokens_entrada_total,
+               COALESCE(SUM(tokens_salida)  FILTER (WHERE tipo_actor = 'bot'), 0) AS tokens_salida_total,
+               COUNT(*) FILTER (WHERE tipo_actor = 'bot')                         AS mensajes_bot,
+               COUNT(*) FILTER (WHERE tipo_actor = 'usuario')                     AS mensajes_usuario,
+               COUNT(*) FILTER (WHERE tipo_actor = 'humano')                      AS mensajes_humano
+           FROM bitrix_eventos WHERE id_conversacion = $1""",
+        id_conversacion,
+    )
+
+    evento_rows = await db.fetch(
+        """SELECT fecha_evento, tipo_actor, texto, stage_id, stage_nombre,
+                  tokens_entrada, tokens_salida, costo_usd,
+                  stage_anterior, stage_anterior_nombre,
+                  duracion_en_stage_segs, duracion_formateada
+           FROM bitrix_eventos WHERE id_conversacion = $1
+           ORDER BY fecha_evento ASC NULLS LAST""",
+        id_conversacion,
+    )
+
+    summary = None
+    if summary_row:
+        summary = {
+            "id_conversacion":              summary_row["id_conversacion"],
+            "telefono":                     summary_row["telefono"],
+            "estado_actual":                summary_row["estado_actual"] or "",
+            "empleado":                     summary_row["empleado"] or "",
+            "creado_el":                    summary_row["creado_el"].isoformat() if summary_row["creado_el"] else None,
+            "resumen":                      summary_row["resumen"] or "",
+            "motivo_escalacion":            summary_row["motivo_escalacion"] or "",
+            "tiempo_primera_respuesta_segs": float(summary_row["tiempo_primera_respuesta_segs"]) if summary_row["tiempo_primera_respuesta_segs"] else None,
+        }
+
+    totales = {
+        "costo_total_usd":      float(totales_row["costo_total_usd"] or 0),
+        "tokens_entrada_total": int(totales_row["tokens_entrada_total"] or 0),
+        "tokens_salida_total":  int(totales_row["tokens_salida_total"] or 0),
+        "mensajes_bot":         int(totales_row["mensajes_bot"] or 0),
+        "mensajes_usuario":     int(totales_row["mensajes_usuario"] or 0),
+        "mensajes_humano":      int(totales_row["mensajes_humano"] or 0),
+    }
+
+    eventos = [
+        {
+            "fecha_evento":           r["fecha_evento"].isoformat() if r["fecha_evento"] else None,
+            "tipo_actor":             r["tipo_actor"],
+            "texto":                  r["texto"] or "",
+            "stage_id":               r["stage_id"] or "",
+            "stage_nombre":           _STAGE_NOMBRES.get(r["stage_id"] or "", r["stage_nombre"] or ""),
+            "tokens_entrada":         int(r["tokens_entrada"]) if r["tokens_entrada"] is not None else None,
+            "tokens_salida":          int(r["tokens_salida"]) if r["tokens_salida"] is not None else None,
+            "costo_usd":              float(r["costo_usd"]) if r["costo_usd"] is not None else None,
+            "stage_anterior":         r["stage_anterior"] or None,
+            "stage_anterior_nombre":  _STAGE_NOMBRES.get(r["stage_anterior"] or "", r["stage_anterior_nombre"] or "") if r["stage_anterior"] else None,
+            "duracion_formateada":    r["duracion_formateada"] or None,
+        }
+        for r in evento_rows
+    ]
+
+    logger.info("bitrix_embed_served", extra={"deal_id": deal_id, "id_conversacion": id_conversacion})
+    return _html_embed(deal_id, summary, totales, eventos)
+
+

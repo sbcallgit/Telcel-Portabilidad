@@ -1114,3 +1114,49 @@ async def get_conversation_detail(
         "totales": totales,
         "eventos": eventos,
     })
+
+
+# ---------------------------------------------------------------------------
+# Bitrix placement bind (one-time setup)
+# ---------------------------------------------------------------------------
+
+@router.post("/bitrix-placement-bind")
+async def bitrix_placement_bind(_: AuthDep) -> JSONResponse:
+    """Registra el placement handler 'Vera · Conversación' en Bitrix24.
+
+    Ejecutar una sola vez tras completar el flujo OAuth (/bitrix/auth).
+    Registra CRM_DEAL_DETAIL_TAB → /bitrix/deal-embed.
+    """
+    import httpx
+    from config.settings import settings
+    from integrations.bitrix.oauth import get_token
+
+    try:
+        token = await get_token()
+    except Exception as exc:
+        return JSONResponse(
+            {"status": "error", "message": f"No hay OAuth token. Ejecuta primero el flujo /bitrix/auth. ({exc})"},
+            status_code=400,
+        )
+
+    domain = settings.bitrix_webhook_url.split("/rest/")[0].replace("https://", "")
+    handler_url = f"{settings.bitrix_public_url}/bitrix/deal-embed"
+
+    async with httpx.AsyncClient(timeout=10) as hx:
+        r = await hx.post(
+            f"https://{domain}/rest/placement.bind",
+            params={"auth": token},
+            json={
+                "PLACEMENT": "CRM_DEAL_DETAIL_TAB",
+                "HANDLER":   handler_url,
+                "LANG_ALL":  {
+                    "ru": {"TITLE": "Vera · Conversación"},
+                    "en": {"TITLE": "Vera · Conversación"},
+                    "es": {"TITLE": "Vera · Conversación"},
+                },
+            },
+        )
+
+    result = r.json()
+    logger.info("bitrix_placement_bind", extra={"result": result, "handler": handler_url})
+    return JSONResponse({"status": "ok", "handler": handler_url, "bitrix_result": result})
