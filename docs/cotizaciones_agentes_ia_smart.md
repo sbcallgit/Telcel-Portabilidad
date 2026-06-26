@@ -507,23 +507,175 @@ Misma arquitectura self-hosted que C#3 pero con GPU AMD en lugar de NVIDIA. El s
 
 ---
 
-## Tabla resumen — las 4 cotizaciones
+## Cotización #5 — Stack de Independencia Tecnológica Total
 
-| | C#1 | C#2 | C#3 | C#4 |
+### Concepto
+
+Eliminar todas las dependencias de pago por uso externas: Claude API, ElevenLabs, LangGraph. El agente de texto y el agente de voz corren completamente en infraestructura propia. La única dependencia inevitable es el canal (Meta WhatsApp API y SIP trunk para PSTN).
+
+### Dependencias actuales vs stack independiente
+
+| Componente actual | Dependencia | Reemplazo self-hosted | Ahorro mensual |
+|---|---|---|---|
+| Claude API (LLM) | Anthropic — pago por token | vLLM + Llama 3.1 70B | $200–500/mes |
+| ElevenLabs (voz) | ElevenLabs — $825/mes + $0.10/min | faster-whisper + Coqui XTTS | $825/mes + $0.10/min |
+| LangGraph (orquestación) | Librería open source | FSM propio en Python puro | $0 (no tiene costo) |
+| Qdrant (vectores) | Ya self-hosted | Sin cambio | $0 |
+| PostgreSQL / Redis | Ya self-hosted | Sin cambio | $0 |
+| Meta WhatsApp API | Inevitable — Meta controla el canal | Sin alternativa | — |
+| SIP trunk | Carrier PSTN | Mayorista (C#2) — ya cubierto | — |
+
+> LangGraph es open source sin costo de API. La independencia real está en el **LLM** y la **voz**.
+
+### Stack completo C#5
+
+| Capa | Tecnología | Propósito |
+|---|---|---|
+| **LLM** | vLLM + Llama 3.1 70B (Q4) | Reemplaza Claude API — agente de ventas, objeciones, clasificación |
+| **ASR** | faster-whisper (Whisper large-v3) | Transcripción de voz del lead |
+| **TTS** | Coqui XTTS-v2 | Síntesis de voz personalizada Vera |
+| **Orquestación** | FSM Python propio | Reemplaza LangGraph — grafo de nodos sin dependencia externa |
+| **Checkpointing** | PostgreSQL propio | Reemplaza langgraph-checkpoint — tablas `agent_state` nativas |
+| **Vectores** | Qdrant (ya existe) | Sin cambio |
+| **SIP** | Asterisk + trunk mayorista | Llamadas salientes |
+| **Canales** | WhatsApp + Telegram (ya existen) | Sin cambio |
+
+### Hardware requerido
+
+Para correr Llama 3.1 70B en Q4 (cuantización 4-bit) + ASR + TTS simultáneamente:
+
+#### Servidor de producción (recomendado)
+
+| Componente | Especificación | Costo estimado |
+|---|---|---|
+| GPU principal (LLM) | 2× RTX 4090 (48 GB VRAM total) | $3,600 USD |
+| GPU secundaria (ASR+TTS) | RTX 3080 10 GB o compartir GPU LLM | $400 USD |
+| RAM | 128 GB DDR5 | $350 USD |
+| CPU | AMD Ryzen 9 7950X o Intel i9-14900K | $450 USD |
+| Almacenamiento | 2 TB NVMe (modelos + BD) | $200 USD |
+| Servidor / rack | Tower workstation o 2U rack | $500 USD |
+| **Total hardware** | | **~$5,500 USD** |
+
+#### Alternativa cloud (sin inversión inicial)
+
+| Instancia | GPUs | VRAM total | Costo/mes (reserved) |
+|---|---|---|---|
+| AWS G5.12xlarge | 4× A10G | 96 GB | ~$1,400 |
+| AWS P4d.24xlarge | 8× A100 | 320 GB | ~$9,800 |
+| Lambda Labs (A100 40GB ×2) | 2× A100 | 80 GB | ~$1,300 |
+| **RunPod (RTX 4090 ×2)** *(recomendado)* | 2× RTX 4090 | 48 GB | **~$480** |
+
+> RunPod permite rentar GPUs por hora con facturación exacta. Para comenzar sin invertir en hardware es la opción más económica.
+
+### Modelos LLM disponibles para self-hosting
+
+| Modelo | VRAM Q4 | Calidad en español | Velocidad tokens/s | Recomendado para |
 |---|---|---|---|---|
-| **Stack** | ElevenLabs + Telnyx | ElevenLabs + SIP propio | NVIDIA Riva + Claude Haiku | AMD ROCm + Ollama local |
-| **Desarrollo** | $540 | $870 | $990 | $1,080 |
-| **Tiempo entrega** | 9 días | 14.5 días | 17.5 días | 20 días |
-| **Costo/min** | $0.1045 | $0.1010 | $0.009 | $0.004 |
-| **Llamada 4 min** | $0.418 | $0.404 | $0.036 | $0.016 |
-| **1K llamadas/día/mes** | $13,365 | $13,020 | $936 | $504 |
-| **5K llamadas/día/mes** | $63,525 | $61,575 | $3,000* | $1,560 |
-| **Dependencias externas** | ElevenLabs + Telnyx | ElevenLabs + mayorista | Claude API + mayorista | Solo mayorista SIP |
-| **Complejidad operativa** | Baja | Media | Alta | Muy alta |
-| **Escalabilidad** | Ilimitada (cloud) | Ilimitada (cloud) | Horizontal (GPUs) | Horizontal (GPUs) |
-| **Latencia estimada** | ~400ms | ~400ms | ~700ms | ~1,000ms |
+| **Llama 3.1 70B Q4** | 40 GB | ★★★★☆ (~90% Claude Sonnet) | ~25–40 | Agente principal |
+| Llama 3.1 8B Q4 | 6 GB | ★★★☆☆ | ~80–120 | Clasificación, rescates |
+| Qwen 2.5 72B Q4 | 40 GB | ★★★★★ (mejor en español) | ~20–35 | Alternativa principal |
+| Mistral 7B Q4 | 5 GB | ★★★☆☆ | ~100–150 | Intent detection |
+| DeepSeek-V2.5 Q4 | 40 GB | ★★★★☆ | ~25–40 | Alternativa Llama |
 
-*C#3 a 5K llamadas/día requiere 4× GPU A10G (~$1,440 cloud) + SIP + LLM.
+> **Estrategia recomendada:** Llama 3.1 70B para los nodos de venta (sondeo, objeciones, cierre) + Llama 3.1 8B para clasificación y validación rápida. Ahorra VRAM y reduce latencia.
+
+### Costo de desarrollo
+
+| Módulo | Días | Horas |
+|---|---|---|
+| vLLM setup + modelos Llama/Qwen en GPU | 1.5 | 12 |
+| Validación de calidad LLM en español (prompts, benchmarks) | 2.0 | 16 |
+| FSM propio (reemplaza LangGraph — 7 nodos) | 3.0 | 24 |
+| Sistema de checkpointing propio en PostgreSQL | 1.5 | 12 |
+| Migración de prompts actuales al nuevo LLM | 2.0 | 16 |
+| faster-whisper + Coqui XTTS en GPU | 2.0 | 16 |
+| Pipeline ASR → LLM → TTS en tiempo real | 2.0 | 16 |
+| Asterisk + SIP trunk mayorista | 2.0 | 16 |
+| FastAPI endpoints + integración Bitrix24 | 1.0 | 8 |
+| Fine-tuning ligero (LoRA) para tono Vera en español | 3.0 | 24 |
+| Optimización latencia LLM (streaming, batch) | 1.5 | 12 |
+| Testing QA completo (texto + voz) | 3.0 | 24 |
+| **Total** | **25.5 días** | **196 h** |
+
+| Concepto | Horas | Tarifa | Total |
+|---|---|---|---|
+| **Total desarrollo (única vez)** | **196 h** | **$7.50/h** | **$1,470 USD** |
+
+### Costo por conversación — comparativa
+
+| Stack | LLM/conv | Voz/min | Costo conversación texto | Costo llamada 4 min |
+|---|---|---|---|---|
+| C#1 (Claude + ElevenLabs) | ~$0.05 | $0.1045 | $0.05 | $0.468 |
+| C#3 (Claude Haiku + Riva) | ~$0.008 | $0.009 | $0.008 | $0.044 |
+| **C#5 (Llama 70B + XTTS)** | **~$0.001** | **~$0.003** | **$0.001** | **$0.013** |
+
+> C#5 es **50× más barato por conversación** que C#1 y **8× más barato** que C#3.
+
+### Ahorro mensual vs stack actual
+
+Asumiendo **1,000 conversaciones de texto/día + 200 llamadas/día**:
+
+| Concepto | Costo actual (Claude + ElevenLabs) | Costo C#5 | Ahorro/mes |
+|---|---|---|---|
+| LLM (texto) | ~$1,500/mes | ~$30/mes (GPU amortizada) | **$1,470** |
+| ElevenLabs plan | $825/mes | $0 | **$825** |
+| Voz por minuto (200 llamadas × 4 min × 30 días) | $2,508/mes | ~$72/mes | **$2,436** |
+| **Total ahorro mensual** | | | **$4,731/mes** |
+
+> Con hardware propio (~$5,500), la inversión se recupera en **~35 días de operación**.
+
+### Infraestructura mensual C#5 (hardware propio + RunPod)
+
+| Concepto | Hardware propio | RunPod cloud |
+|---|---|---|
+| GPU (amortizada 36 meses) | $153/mes | $480/mes |
+| Servidor / electricidad | $80/mes | $0 |
+| SIP trunk mayorista | $36–72/mes | $36–72/mes |
+| **Total operativo/mes** | **~$270–305/mes** | **~$516–552/mes** |
+
+### Pros y Contras
+
+| ✅ Pros | ❌ Contras |
+|---|---|
+| Cero dependencia de APIs externas de pago | Mayor inversión inicial (hardware + desarrollo) |
+| 50× más barato por conversación que C#1 | Llama 70B no alcanza el 100% de calidad de Claude Sonnet |
+| Datos y conversaciones nunca salen de tu infraestructura | Requiere DevOps para operar vLLM + GPU en producción |
+| Escalable horizontalmente sin costo por token | Fine-tuning necesario para mantener tono de Vera |
+| Reutilizable para cualquier cliente o campaña nueva | Tiempo de desarrollo más largo (25.5 días) |
+| Control total sobre actualizaciones de modelos | Latencia LLM ~800–1,200ms vs ~300ms de Claude API |
+| Puede monetizarse como plataforma propia | |
+
+### Resumen ejecutivo
+
+| Concepto | Hardware propio | RunPod cloud |
+|---|---|---|
+| **Desarrollo (única vez)** | **$1,470 USD** | **$1,470 USD** |
+| **Inversión hardware** | **$5,500 USD** | **$0** |
+| **Costo operativo/mes** | **~$270 USD** | **~$516 USD** |
+| **Ahorro vs stack actual/mes** | **~$4,731 USD** | **~$4,485 USD** |
+| **Recuperación de inversión** | **~35 días** | **~10 días** |
+| **Costo conversación texto** | **~$0.001** | **~$0.001** |
+| **Costo llamada 4 min** | **~$0.013** | **~$0.013** |
+| **Dependencias externas** | Solo SIP + WhatsApp API | Solo SIP + WhatsApp API |
+| **Tiempo de entrega** | **25.5 días hábiles** | **25.5 días hábiles** |
+
+---
+
+## Tabla resumen — las 5 cotizaciones
+
+| | C#1 | C#2 | C#3 | C#4 | C#5 |
+|---|---|---|---|---|---|
+| **Stack** | ElevenLabs + Telnyx | ElevenLabs + SIP propio | NVIDIA Riva + Claude Haiku | AMD ROCm + Ollama local | vLLM Llama 70B + XTTS (independencia total) |
+| **Desarrollo** | $540 | $870 | $990 | $1,080 | $1,470 |
+| **Tiempo entrega** | 9 días | 14.5 días | 17.5 días | 20 días | 25.5 días |
+| **Costo/conv texto** | ~$0.05 | ~$0.05 | ~$0.008 | ~$0.002 | **~$0.001** |
+| **Costo llamada 4 min** | $0.418 | $0.404 | $0.036 | $0.016 | **$0.013** |
+| **Operativo/mes (1K txt/día)** | $13,365 | $13,020 | $936 | $504 | **$270–516** |
+| **Dependencias externas** | ElevenLabs + Telnyx | ElevenLabs + mayorista | Claude API + mayorista | Solo mayorista SIP | **Solo SIP + WhatsApp** |
+| **Complejidad operativa** | Baja | Media | Alta | Muy alta | Muy alta |
+| **Latencia texto** | ~300ms | ~300ms | ~300ms | ~800ms | ~800–1,200ms |
+| **Latencia voz E2E** | ~400ms | ~400ms | ~700ms | ~1,000ms | ~1,000–1,400ms |
+| **Privacidad datos** | Parcial | Parcial | Alta | Total | **Total** |
 
 **Cuándo elegir cada una:**
 
@@ -532,5 +684,6 @@ Misma arquitectura self-hosted que C#3 pero con GPU AMD en lugar de NVIDIA. El s
 | Necesitas arrancar en < 2 semanas y el volumen es bajo | **C#1** |
 | Ya tienes > 400 llamadas/día y quieres reducir SIP | **C#2** |
 | El volumen justifica self-hosted y tienes operador DevOps | **C#3** |
-| Quieres máximo ahorro, no importa la latencia +300ms extra | **C#4** |
-| El volumen crece a 3,000+ llamadas/día | **C#3 + escalabilidad horizontal** |
+| Quieres máximo ahorro en voz, no importa la latencia extra | **C#4** |
+| Quieres independencia total y proyectas múltiples clientes | **C#5** |
+| El volumen crece a 3,000+ llamadas/día | **C#3 o C#5 + escalabilidad horizontal** |
