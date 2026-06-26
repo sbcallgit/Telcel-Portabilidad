@@ -280,6 +280,8 @@ table {
   }
 
   tbody tr:hover { background: #fafafa; }
+  tbody tr.row-clickable { cursor: pointer; }
+  tbody tr.row-clickable:hover { background: #f0f7ff; }
 }
 
 .mono { font-family: monospace; font-size: .8rem; }

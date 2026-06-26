@@ -1003,3 +1003,114 @@ async def get_costo_resultado(
             for r in detalle_rows
         ],
     })
+
+
+# ---------------------------------------------------------------------------
+# Detalle de conversación individual
+# ---------------------------------------------------------------------------
+
+@router.get("/conversation/{id_conversacion}")
+async def get_conversation_detail(
+    id_conversacion: str,
+    _: AuthDep,
+) -> JSONResponse:
+    """Retorna el detalle completo de una conversación: resumen, mensajes y pipeline."""
+    from integrations.postgres import client as db
+
+    # 1. Resumen desde kpi_conversaciones (puede no existir si es muy reciente)
+    summary_row = await db.fetchrow(
+        """
+        SELECT id_conversacion, telefono, estado_actual, etapa, empleado,
+               creado_el, cerrado_el, resumen, motivo_escalacion,
+               mensajes_cliente, mensajes_bot, mensajes_humano,
+               tiempo_primera_respuesta_segs, tiempo_cierre_segs
+        FROM kpi_conversaciones
+        WHERE id_conversacion = $1
+        """,
+        id_conversacion,
+    )
+
+    # 2. Todos los eventos ordenados cronológicamente
+    evento_rows = await db.fetch(
+        """
+        SELECT fecha_evento, tipo_actor, texto,
+               stage_id, stage_nombre,
+               tokens_entrada, tokens_salida, costo_usd,
+               stage_anterior, stage_anterior_nombre,
+               duracion_en_stage_segs, duracion_formateada,
+               empleado_id
+        FROM bitrix_eventos
+        WHERE id_conversacion = $1
+        ORDER BY fecha_evento ASC NULLS LAST
+        """,
+        id_conversacion,
+    )
+
+    # 3. Totales calculados desde los eventos
+    totales_row = await db.fetchrow(
+        """
+        SELECT
+            COALESCE(SUM(costo_usd) FILTER (WHERE tipo_actor = 'bot'), 0)          AS costo_total_usd,
+            COALESCE(SUM(tokens_entrada) FILTER (WHERE tipo_actor = 'bot'), 0)      AS tokens_entrada_total,
+            COALESCE(SUM(tokens_salida) FILTER (WHERE tipo_actor = 'bot'), 0)       AS tokens_salida_total,
+            COUNT(*) FILTER (WHERE tipo_actor = 'bot')                              AS mensajes_bot,
+            COUNT(*) FILTER (WHERE tipo_actor = 'usuario')                          AS mensajes_usuario,
+            COUNT(*) FILTER (WHERE tipo_actor = 'humano')                           AS mensajes_humano
+        FROM bitrix_eventos
+        WHERE id_conversacion = $1
+        """,
+        id_conversacion,
+    )
+
+    summary = None
+    if summary_row:
+        summary = {
+            "id_conversacion":              summary_row["id_conversacion"],
+            "telefono":                     summary_row["telefono"],
+            "estado_actual":                summary_row["estado_actual"] or "",
+            "etapa":                        summary_row["etapa"] or "",
+            "empleado":                     summary_row["empleado"] or "",
+            "creado_el":                    summary_row["creado_el"].isoformat() if summary_row["creado_el"] else None,
+            "cerrado_el":                   summary_row["cerrado_el"].isoformat() if summary_row["cerrado_el"] else None,
+            "resumen":                      summary_row["resumen"] or "",
+            "motivo_escalacion":            summary_row["motivo_escalacion"] or "",
+            "mensajes_cliente":             int(summary_row["mensajes_cliente"] or 0),
+            "mensajes_bot":                 int(summary_row["mensajes_bot"] or 0),
+            "mensajes_humano":              int(summary_row["mensajes_humano"] or 0),
+            "tiempo_primera_respuesta_segs": float(summary_row["tiempo_primera_respuesta_segs"]) if summary_row["tiempo_primera_respuesta_segs"] else None,
+            "tiempo_cierre_segs":           float(summary_row["tiempo_cierre_segs"]) if summary_row["tiempo_cierre_segs"] else None,
+        }
+
+    totales = {
+        "costo_total_usd":      float(totales_row["costo_total_usd"] or 0),
+        "tokens_entrada_total": int(totales_row["tokens_entrada_total"] or 0),
+        "tokens_salida_total":  int(totales_row["tokens_salida_total"] or 0),
+        "mensajes_bot":         int(totales_row["mensajes_bot"] or 0),
+        "mensajes_usuario":     int(totales_row["mensajes_usuario"] or 0),
+        "mensajes_humano":      int(totales_row["mensajes_humano"] or 0),
+    }
+
+    eventos = [
+        {
+            "fecha_evento":            r["fecha_evento"].isoformat() if r["fecha_evento"] else None,
+            "tipo_actor":              r["tipo_actor"],
+            "texto":                   r["texto"] or "",
+            "stage_id":                r["stage_id"] or "",
+            "stage_nombre":            _STAGE_NOMBRES.get(r["stage_id"] or "", r["stage_nombre"] or ""),
+            "tokens_entrada":          int(r["tokens_entrada"]) if r["tokens_entrada"] is not None else None,
+            "tokens_salida":           int(r["tokens_salida"]) if r["tokens_salida"] is not None else None,
+            "costo_usd":               float(r["costo_usd"]) if r["costo_usd"] is not None else None,
+            "stage_anterior":          r["stage_anterior"] or None,
+            "stage_anterior_nombre":   _STAGE_NOMBRES.get(r["stage_anterior"] or "", r["stage_anterior_nombre"] or "") if r["stage_anterior"] else None,
+            "duracion_en_stage_segs":  int(r["duracion_en_stage_segs"]) if r["duracion_en_stage_segs"] is not None else None,
+            "duracion_formateada":     r["duracion_formateada"] or None,
+            "empleado_id":             r["empleado_id"] or None,
+        }
+        for r in evento_rows
+    ]
+
+    return JSONResponse({
+        "summary": summary,
+        "totales": totales,
+        "eventos": eventos,
+    })

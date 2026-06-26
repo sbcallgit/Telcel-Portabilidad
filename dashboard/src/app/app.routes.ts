@@ -17,5 +17,10 @@ export const routes: Routes = [
     loadComponent: () => import('./pages/analytics/analytics.component').then(m => m.AnalyticsComponent),
     canActivate: [authGuard],
   },
+  {
+    path: 'conversation/:id',
+    loadComponent: () => import('./pages/conversation-detail/conversation-detail.component').then(m => m.ConversationDetailComponent),
+    canActivate: [authGuard],
+  },
   { path: '**', redirectTo: 'dashboard' },
 ];

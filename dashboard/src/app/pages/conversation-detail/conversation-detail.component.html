@@ -1,0 +1,275 @@
+<style>
+  .layout { display: flex; min-height: 100vh; font-family: Inter, system-ui, sans-serif; background: #f4f6f9; color: #1a202c; font-size: 14px; }
+  .sidebar { width: 220px; background: #1a202c; display: flex; flex-direction: column; padding: 1.5rem 1rem; gap: .5rem; flex-shrink: 0; }
+  .sidebar-logo { display: flex; align-items: center; gap: .5rem; color: #fff; font-weight: 700; font-size: 15px; margin-bottom: 1rem; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #e8001d; }
+  .nav-item { display: flex; align-items: center; gap: .6rem; color: #94a3b8; text-decoration: none; padding: .5rem .75rem; border-radius: 8px; font-size: 13px; transition: background .15s; }
+  .nav-item:hover, .nav-item.active { background: rgba(255,255,255,.08); color: #fff; }
+  .logout-btn { margin-top: auto; display: flex; align-items: center; gap: .5rem; background: none; border: none; color: #64748b; cursor: pointer; font-size: 13px; padding: .5rem .75rem; }
+  .main { flex: 1; padding: 2rem; overflow-y: auto; min-width: 0; }
+  .topbar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .back-btn { display: flex; align-items: center; gap: .4rem; background: none; border: 1px solid #e2e8f0; border-radius: 8px; padding: .4rem .9rem; cursor: pointer; color: #64748b; font-size: 13px; transition: background .15s; }
+  .back-btn:hover { background: #f1f5f9; }
+  .page-title { font-size: 20px; font-weight: 700; color: #1a202c; }
+  .page-sub { font-size: 13px; color: #64748b; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; background: #e2e8f0; color: #475569; }
+  [data-stage="C90:WON"] { background: #d1fae5; color: #065f46; }
+  [data-stage="C90:LOSE"] { background: #fee2e2; color: #991b1b; }
+  [data-stage="C90:PROSPECTO"] { background: #dbeafe; color: #1e40af; }
+  [data-stage="C90:NEW"] { background: #fee2e2; color: #991b1b; }
+  [data-stage="C90:1"] { background: #fef3c7; color: #92400e; }
+  [data-stage="C90:2"] { background: #fef3c7; color: #92400e; }
+  [data-stage="C90:3"] { background: #fef3c7; color: #92400e; }
+  [data-stage="C90:UC_8WB2DT"] { background: #ede9fe; color: #5b21b6; }
+  [data-stage="C90:SEGUIMIENTO"] { background: #e0f2fe; color: #0369a1; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .card { background: #fff; border-radius: 12px; padding: 1.2rem 1.4rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-top: 3px solid #e2e8f0; }
+  .card--bot { border-top-color: #e8001d; }
+  .card--user { border-top-color: #3b82f6; }
+  .card--human { border-top-color: #f59e0b; }
+  .card--cost { border-top-color: #10b981; }
+  .card-label { font-size: 12px; color: #64748b; margin-bottom: .3rem; }
+  .card-value { font-size: 24px; font-weight: 700; color: #1a202c; }
+  .card-sub { font-size: 11px; color: #94a3b8; margin-top: .2rem; }
+  .section { background: #fff; border-radius: 12px; padding: 1.4rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); margin-bottom: 1.5rem; }
+  .section-title { font-size: 15px; font-weight: 600; color: #1a202c; margin-bottom: 1rem; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: .05em; padding: .6rem .75rem; border-bottom: 1px solid #e2e8f0; white-space: nowrap; }
+  td { padding: .55rem .75rem; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .actor-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .actor-bot { background: #fee2e2; color: #991b1b; }
+  .actor-usuario { background: #dbeafe; color: #1e40af; }
+  .actor-humano { background: #fef3c7; color: #92400e; }
+  .actor-sistema { background: #f1f5f9; color: #475569; }
+  .msg-text { max-width: 520px; word-break: break-word; line-height: 1.5; }
+  .cost-cell { font-size: 12px; color: #10b981; font-weight: 600; white-space: nowrap; }
+  .tokens-cell { font-size: 11px; color: #94a3b8; white-space: nowrap; }
+  .date-cell { font-size: 12px; color: #64748b; white-space: nowrap; }
+  /* Pipeline */
+  .pipeline-scroll { display: flex; gap: 0; overflow-x: auto; padding-bottom: .5rem; align-items: flex-start; }
+  .pipeline-step { display: flex; align-items: flex-start; }
+  .pipeline-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: .75rem 1rem; min-width: 130px; max-width: 160px; }
+  .pipeline-stage { font-size: 12px; font-weight: 700; color: #1a202c; margin-bottom: .2rem; }
+  .pipeline-date { font-size: 11px; color: #64748b; }
+  .pipeline-dur { font-size: 11px; color: #94a3b8; margin-top: .2rem; }
+  .pipeline-arrow { display: flex; align-items: center; padding: 0 .5rem; color: #94a3b8; font-size: 18px; margin-top: .8rem; }
+  .loading-wrap { display: flex; align-items: center; gap: .75rem; color: #64748b; padding: 3rem; }
+  .spinner { width: 20px; height: 20px; border: 2px solid #e2e8f0; border-top-color: #e8001d; border-radius: 50%; animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .alert-error { background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 1rem 1.4rem; }
+  .empty { color: #94a3b8; font-style: italic; text-align: center; padding: 2rem; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin-bottom: 1.2rem; font-size: 13px; color: #64748b; }
+  .meta-row strong { color: #1a202c; }
+</style>
+
+<div class="layout">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <span class="dot"></span>
+      <span>KPI Dashboard</span>
+    </div>
+    <nav>
+      <a class="nav-item" routerLink="/dashboard">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Resumen
+      </a>
+      <a class="nav-item" routerLink="/analytics">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        Analytics
+      </a>
+    </nav>
+    <button class="logout-btn" routerLink="/login">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      Cerrar sesión
+    </button>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <!-- Header -->
+    <div class="topbar">
+      <button class="back-btn" (click)="back()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15,18 9,12 15,6"/></svg>
+        Volver
+      </button>
+      <div>
+        <h1 class="page-title">
+          {{ data?.summary?.telefono || id }}
+          @if (data?.summary?.estado_actual) {
+            <span class="badge" style="margin-left:.5rem;font-size:12px" [attr.data-stage]="data!.summary!.estado_actual">
+              {{ stageLabel(data!.summary!.estado_actual) }}
+            </span>
+          }
+        </h1>
+        <p class="page-sub">
+          Detalle de conversación
+          @if (data?.summary?.empleado) { · Asesor: {{ data!.summary!.empleado }} }
+          @if (data?.summary?.creado_el) { · {{ data!.summary!.creado_el | date:'dd/MM/yy HH:mm' }} }
+        </p>
+      </div>
+    </div>
+
+    @if (loading) {
+      <div class="loading-wrap">
+        <div class="spinner"></div>
+        <span>Cargando conversación…</span>
+      </div>
+    } @else if (error) {
+      <div class="alert-error">{{ error }}</div>
+    } @else if (data) {
+
+      <!-- KPI Cards -->
+      <div class="cards">
+        <div class="card card--bot">
+          <p class="card-label">Mensajes Bot</p>
+          <p class="card-value">{{ data.totales.mensajes_bot }}</p>
+        </div>
+        <div class="card card--user">
+          <p class="card-label">Mensajes Usuario</p>
+          <p class="card-value">{{ data.totales.mensajes_usuario }}</p>
+        </div>
+        <div class="card card--human">
+          <p class="card-label">Mensajes Asesor</p>
+          <p class="card-value">{{ data.totales.mensajes_humano }}</p>
+        </div>
+        <div class="card card--cost">
+          <p class="card-label">Costo Total (USD)</p>
+          <p class="card-value">{{ formatCost(data.totales.costo_total_usd) }}</p>
+          <p class="card-sub">{{ data.totales.tokens_entrada_total | number }} in · {{ data.totales.tokens_salida_total | number }} out tokens</p>
+        </div>
+        @if (data.summary?.tiempo_primera_respuesta_segs != null) {
+          <div class="card">
+            <p class="card-label">1ª Respuesta</p>
+            <p class="card-value">{{ formatSecs(data.summary!.tiempo_primera_respuesta_segs) }}</p>
+          </div>
+        }
+        @if (data.summary?.tiempo_cierre_segs != null) {
+          <div class="card">
+            <p class="card-label">Tiempo Cierre</p>
+            <p class="card-value">{{ formatSecs(data.summary!.tiempo_cierre_segs) }}</p>
+          </div>
+        }
+      </div>
+
+      <!-- Resumen AI -->
+      @if (data.summary?.resumen) {
+        <div class="section">
+          <p class="section-title">Resumen</p>
+          <p style="color:#475569;line-height:1.6">{{ data.summary!.resumen }}</p>
+          @if (data.summary?.motivo_escalacion) {
+            <p style="margin-top:.5rem;font-size:12px;color:#94a3b8">
+              Motivo escalamiento: <strong style="color:#475569">{{ data.summary!.motivo_escalacion }}</strong>
+            </p>
+          }
+        </div>
+      }
+
+      <!-- Mensajes -->
+      <div class="section">
+        <p class="section-title">Mensajes de la conversación ({{ mensajes.length }})</p>
+        @if (mensajes.length === 0) {
+          <p class="empty">Sin mensajes registrados para esta conversación.</p>
+        } @else {
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Hora</th>
+                  <th>Actor</th>
+                  <th>Mensaje</th>
+                  <th>Costo</th>
+                  <th>Tokens</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (e of mensajes; track ($index)) {
+                  <tr>
+                    <td class="date-cell">{{ e.fecha_evento ? (e.fecha_evento | date:'dd/MM HH:mm:ss') : '—' }}</td>
+                    <td>
+                      <span class="actor-badge" [ngClass]="'actor-' + e.tipo_actor">
+                        {{ e.tipo_actor | titlecase }}
+                      </span>
+                    </td>
+                    <td class="msg-text">{{ e.texto || '—' }}</td>
+                    <td class="cost-cell">{{ e.costo_usd != null ? formatCost(e.costo_usd) : '' }}</td>
+                    <td class="tokens-cell">
+                      @if (e.tokens_entrada != null) {
+                        {{ e.tokens_entrada | number }}↑ {{ e.tokens_salida | number }}↓
+                      }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        }
+      </div>
+
+      <!-- Trazabilidad del Pipeline -->
+      @if (transiciones.length > 0) {
+        <div class="section">
+          <p class="section-title">Trazabilidad del Pipeline ({{ transiciones.length }} transiciones)</p>
+          <div class="pipeline-scroll">
+            @for (t of transiciones; track ($index); let last = $last) {
+              @if ($index === 0 && t.stage_anterior) {
+                <div class="pipeline-step">
+                  <div class="pipeline-card">
+                    <div class="pipeline-stage">{{ stageLabel(t.stage_anterior) }}</div>
+                    <div class="pipeline-date">Inicio</div>
+                  </div>
+                  <div class="pipeline-arrow">→</div>
+                </div>
+              }
+              <div class="pipeline-step">
+                <div class="pipeline-card">
+                  <div class="pipeline-stage">{{ stageLabel(t.stage_id) }}</div>
+                  <div class="pipeline-date">{{ t.fecha_evento ? (t.fecha_evento | date:'dd/MM HH:mm') : '—' }}</div>
+                  @if (t.duracion_formateada) {
+                    <div class="pipeline-dur">← {{ t.duracion_formateada }} en etapa anterior</div>
+                  }
+                </div>
+                @if (!last) {
+                  <div class="pipeline-arrow">→</div>
+                }
+              </div>
+            }
+          </div>
+
+          <!-- Tabla detallada de transiciones -->
+          <div class="table-wrap" style="margin-top:1rem">
+            <table>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Transición</th>
+                  <th>Duración en etapa anterior</th>
+                  <th>Asesor</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (t of transiciones; track ($index)) {
+                  <tr>
+                    <td class="date-cell">{{ t.fecha_evento ? (t.fecha_evento | date:'dd/MM/yy HH:mm') : '—' }}</td>
+                    <td>
+                      @if (t.stage_anterior) {
+                        <span class="badge" [attr.data-stage]="t.stage_anterior">{{ stageLabel(t.stage_anterior) }}</span>
+                        <span style="margin:0 6px;color:#94a3b8">→</span>
+                      }
+                      <span class="badge" [attr.data-stage]="t.stage_id">{{ stageLabel(t.stage_id) }}</span>
+                    </td>
+                    <td>{{ t.duracion_formateada || '—' }}</td>
+                    <td style="color:#64748b">{{ t.empleado_id || '—' }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+
+    }
+  </main>
+</div>

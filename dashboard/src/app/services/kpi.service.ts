@@ -31,6 +31,7 @@ export interface Conversacion {
   mensajes_bot: number;
   mensajes_humano: number;
   tiempo_primera_respuesta_segs: number | null;
+  tiempo_cierre_segs: number | null;
   resumen: string;
   motivo_escalacion: string;
 }
@@ -205,6 +206,37 @@ export interface MegacableData {
   conversaciones: MegacableConversacion[];
 }
 
+export interface ConversationEvento {
+  fecha_evento: string | null;
+  tipo_actor: 'usuario' | 'bot' | 'humano' | 'sistema';
+  texto: string;
+  stage_id: string;
+  stage_nombre: string;
+  tokens_entrada: number | null;
+  tokens_salida: number | null;
+  costo_usd: number | null;
+  stage_anterior: string | null;
+  stage_anterior_nombre: string | null;
+  duracion_en_stage_segs: number | null;
+  duracion_formateada: string | null;
+  empleado_id: string | null;
+}
+
+export interface ConversationTotales {
+  costo_total_usd: number;
+  tokens_entrada_total: number;
+  tokens_salida_total: number;
+  mensajes_bot: number;
+  mensajes_usuario: number;
+  mensajes_humano: number;
+}
+
+export interface ConversationDetail {
+  summary: Conversacion | null;
+  totales: ConversationTotales;
+  eventos: ConversationEvento[];
+}
+
 @Injectable({ providedIn: 'root' })
 export class KpiService {
   private http = inject(HttpClient);
@@ -265,6 +297,10 @@ export class KpiService {
     if (desde) params = params.set('desde', desde);
     if (hasta) params = params.set('hasta', hasta);
     return this.http.get<FunnelData>('/api/admin/funnel-data', { headers: this.headers, params });
+  }
+
+  getConversationDetail(id: string): Observable<ConversationDetail> {
+    return this.http.get<ConversationDetail>(`/api/admin/conversation/${id}`, { headers: this.headers });
   }
 
   triggerExport(): Observable<{ status: string; message: string }> {

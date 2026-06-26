@@ -283,7 +283,7 @@
             </thead>
             <tbody>
               @for (c of filteredConversaciones; track c.id_conversacion) {
-                <tr>
+                <tr class="row-clickable" (click)="openDetail(c.id_conversacion)" title="Ver detalle">
                   <td class="mono">{{ c.telefono || '—' }}</td>
                   <td><span class="badge" [attr.data-stage]="c.estado_actual">{{ stageLabel(c.estado_actual) }}</span></td>
                   <td>{{ c.empleado || '—' }}</td>

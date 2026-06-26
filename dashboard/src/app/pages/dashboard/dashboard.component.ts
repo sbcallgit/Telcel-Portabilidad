@@ -164,7 +164,10 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
           this.loading = false;
           // setTimeout(0) espera a que Angular renderice el bloque @else
           // antes de intentar acceder a los canvas via @ViewChild
-          if (this.chartsReady) setTimeout(() => this.renderCharts(), 0);
+          if (this.chartsReady) setTimeout(() => {
+            this.renderCharts();
+            if (this.funnelData) this.renderFunnelChart();
+          }, 0);
         },
         error: (err: { status?: number }) => {
           if (err.status === 403) {
@@ -623,6 +626,10 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
         this.exportLoading = false;
       },
     });
+  }
+
+  openDetail(id: string): void {
+    this.router.navigate(['/conversation', id]);
   }
 
   logout(): void {
