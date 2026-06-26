@@ -325,3 +325,212 @@ Recuperación de la inversión adicional: **< 3 días de operación**
 | Infraestructura mensual — 5,000 llamadas/día | **~$3,060** | **~$720** |
 | **Tiempo de entrega** | **17.5 días hábiles** | **17.5 días hábiles** |
 | GPU mínima requerida | AWS G5.xlarge | RTX 4090 / A10G |
+
+### Escalabilidad horizontal de C#3
+
+Una sola GPU A10G (24 GB) soporta ~20–30 llamadas simultáneas. Para escalar más allá de ese umbral se requiere orquestación multi-instancia.
+
+#### Capacidad por instancia GPU
+
+| GPU | VRAM | Llamadas simultáneas | Costo cloud/mes |
+|---|---|---|---|
+| A10G (24 GB) | 24 GB | 20–30 | $360 |
+| A100 (40 GB) | 40 GB | 80–120 | $1,200 |
+| H100 (80 GB) | 80 GB | 200–300 | $2,800 |
+
+#### Llamadas simultáneas en pico por volumen diario
+
+> Fórmula: `(llamadas/día × duración_promedio_min) ÷ (horas_operación × 60)`  
+> Ejemplo: 1,000 llamadas × 4 min ÷ (8h × 60) = **~8 simultáneas promedio**, pico 2× = **~16**
+
+| Volumen | Pico simultáneo | GPUs A10G necesarias | Costo GPU/mes |
+|---|---|---|---|
+| 500 llamadas/día | ~8 | 1 | $360 |
+| 1,000 llamadas/día | ~16 | 1 | $360 |
+| 3,000 llamadas/día | ~50 | 2 | $720 |
+| 5,000 llamadas/día | ~83 | 3–4 | $1,080–1,440 |
+| 10,000 llamadas/día | ~166 | 6–8 | $2,160–2,880 |
+
+#### Arquitectura de escalabilidad horizontal (desarrollo adicional)
+
+Para escalar más allá de 1 GPU se requiere:
+
+| Componente | Tecnología | Propósito |
+|---|---|---|
+| Orquestador de contenedores | Kubernetes (EKS/GKE) | Auto-scaling de pods Riva + Asterisk |
+| GPU node pool | AWS G5 / GCP A2 autoscaling | Suma/resta GPUs según carga |
+| Load balancer SIP | Kamailio | Distribuye llamadas entre instancias Asterisk |
+| Health checks | Prometheus + Grafana | Monitoreo de ocupación GPU y latencia |
+| Cola de llamadas | Redis + arq | Buffer cuando todos los slots están ocupados |
+
+**Costo de desarrollo adicional para arquitectura escalable:**
+
+| Módulo | Días | Horas | Costo |
+|---|---|---|---|
+| Kubernetes + GPU node pool | 2.0 | 16 | $120 |
+| Load balancer SIP (Kamailio) | 1.5 | 12 | $90 |
+| Monitoreo GPU + alertas | 1.0 | 8 | $60 |
+| Cola de llamadas + retry | 1.0 | 8 | $60 |
+| **Total adicional** | **5.5 días** | **44 h** | **$330 USD** |
+
+> Con este módulo adicional, C#3 pasa de escala fija a escala ilimitada horizontal, con costo lineal en GPU cloud conforme crece el volumen.
+
+#### Infraestructura mensual con escalabilidad horizontal (C#3)
+
+| Volumen | GPUs | GPU cloud/mes | SIP mayorista | LLM Haiku | **Total/mes** |
+|---|---|---|---|---|---|
+| 500 llamadas/día | 1× A10G | $360 | $36 | $120 | **$516** |
+| 1,000 llamadas/día | 1× A10G | $360 | $72 | $240 | **$672** |
+| 3,000 llamadas/día | 2× A10G | $720 | $216 | $720 | **$1,656** |
+| 5,000 llamadas/día | 4× A10G | $1,440 | $360 | $1,200 | **$3,000** |
+| 10,000 llamadas/día | 8× A10G | $2,880 | $720 | $2,400 | **$6,000** |
+
+> A 10,000 llamadas/día C#3 escalable cuesta **$6,000/mes** vs **$133,650/mes** de C#1. Ahorro: **$127,650/mes**.
+
+---
+
+## Cotización #4 — Agente de Voz Self-Hosted con AMD ROCm
+
+### Concepto
+
+Misma arquitectura self-hosted que C#3 pero con GPU AMD en lugar de NVIDIA. El stack ASR/TTS cambia porque NVIDIA Riva requiere CUDA — se usa `faster-whisper` (ASR) + Coqui XTTS (TTS) + Ollama (LLM local), todos compatibles con ROCm.
+
+**Ventaja principal:** una RX 7900 XTX cuesta ~$800 USD vs ~$1,800 de una RTX 4090 — **55% menos en hardware**.
+
+### Stack completo
+
+| Componente | C#3 NVIDIA | C#4 AMD |
+|---|---|---|
+| ASR | NVIDIA Riva (Conformer-CTC) | faster-whisper (Whisper large-v3) |
+| TTS | NVIDIA Riva (FastPitch + HiFiGAN) | Coqui XTTS-v2 |
+| LLM | Claude Haiku (API) | Ollama (Llama 3.1 8B) — local, $0 |
+| GPU requerida | NVIDIA CUDA | AMD ROCm (RX 7900 XTX / MI250) |
+| Protocolo ASR/TTS | gRPC streaming | HTTP / WebSocket streaming |
+| SIP | Asterisk + trunk mayorista | Asterisk + trunk mayorista (igual) |
+
+### Diferencias técnicas clave
+
+| Aspecto | C#3 NVIDIA Riva | C#4 AMD ROCm |
+|---|---|---|
+| Latencia ASR | ~150–250ms | ~200–350ms (Whisper no es streaming nativo) |
+| Latencia TTS | ~100–200ms | ~300–500ms (Coqui más lento que Riva) |
+| Latencia E2E estimada | 600–800ms | 900–1,200ms |
+| Calidad de voz | Alta (modelos Riva entrenados) | Muy alta (XTTS con clonación de voz) |
+| Voz personalizada Vera | Requiere fine-tuning Riva | Clonación en 6 segundos de audio (XTTS) |
+| Ecosistema | Maduro, soporte NVIDIA | En crecimiento, menos documentación |
+| LLM local incluido | No (Claude API) | Sí (Ollama Llama 3.1 8B) |
+
+### GPU requerida — hardware AMD propio
+
+| Hardware | VRAM | Llamadas simultáneas | Costo único | ROCm soporte |
+|---|---|---|---|---|
+| **RX 7900 XTX** *(recomendado)* | 24 GB | ~15–20 | $800 USD | ✅ Estable |
+| RX 7900 XT | 20 GB | ~12–16 | $650 USD | ✅ Estable |
+| MI250 (enterprise) | 128 GB | ~100–150 | $8,000 USD | ✅ Maduro |
+| RX 6900 XT | 16 GB | ~8–12 | $400 USD | ⚠️ Parcial |
+
+> AMD no ofrece instancias GPU en cloud comparables al precio de AWS G5. La ventaja de AMD es el **hardware propio** a menor costo.
+
+### Costo de desarrollo
+
+| Módulo | Días | Horas |
+|---|---|---|
+| AMD ROCm setup + Docker con PyTorch ROCm | 2.0 | 16 |
+| faster-whisper en ROCm + pipeline ASR streaming | 2.0 | 16 |
+| Coqui XTTS-v2 en ROCm + clonación de voz Vera | 2.0 | 16 |
+| Ollama + Llama 3.1 8B en español (fine-tuning/quantización) | 2.5 | 20 |
+| Orquestación ASR → LLM → TTS en tiempo real | 2.0 | 16 |
+| Asterisk + SIP trunk mayorista | 2.0 | 16 |
+| FastAPI endpoint + trigger Bitrix24 | 0.5 | 4 |
+| Contexto del lead al agente | 1.0 | 8 |
+| Optimización latencia (ROCm más impredecible que CUDA) | 2.0 | 16 |
+| Testing QA end-to-end | 2.0 | 16 |
+| **Total** | **20 días** | **144 h** |
+
+| Concepto | Horas | Tarifa | Total |
+|---|---|---|---|
+| **Total desarrollo (única vez)** | **144 h** | **$7.50/h** | **$1,080 USD** |
+
+### Costo por minuto — desglose
+
+| Componente | C#3 NVIDIA | C#4 AMD |
+|---|---|---|
+| ASR (faster-whisper local) | $0 | $0 |
+| TTS (Coqui XTTS local) | $0 | $0 |
+| LLM (Claude Haiku API) | ~$0.002 | $0 (Ollama local) |
+| SIP trunk mayorista | $0.001 | $0.001 |
+| GPU amortizada (hardware propio, 36 meses) | ~$0.002 | ~$0.001 |
+| Servidor/electricidad | ~$0.002 | ~$0.002 |
+| **Total/min** | **~$0.007** | **~$0.004** |
+
+### Comparativa completa de las 4 cotizaciones
+
+| Cotización | Stack | Desarrollo | Costo/min | Llamada 4 min | 1K llamadas/día/mes |
+|---|---|---|---|---|---|
+| #1 ElevenLabs + Telnyx | Cloud | $540 / 9 días | $0.1045 | $0.418 | $13,365 |
+| #2 ElevenLabs + SIP propio | Cloud + SIP | $870 / 14.5 días | $0.1010 | $0.404 | $13,020 |
+| #3 NVIDIA Riva self-hosted | CUDA GPU | $990 / 17.5 días | $0.009 | $0.036 | $936 |
+| **#4 AMD ROCm self-hosted** | **ROCm GPU** | **$1,080 / 20 días** | **$0.004** | **$0.016** | **$504** |
+
+> C#4 es la opción más barata por minuto gracias a LLM local (Ollama). Hardware ~55% más barato que NVIDIA para misma VRAM.
+
+### Inversión en hardware + recuperación
+
+| Hardware | Costo único | Ahorro vs C#1 (1K llamadas/día) | Recuperación |
+|---|---|---|---|
+| RX 7900 XTX ($800) + servidor ($500) | $1,300 | $12,861/mes | **< 2 días** |
+| RTX 4090 ($1,800) + servidor ($500) | $2,300 | $12,429/mes | **< 6 días** |
+
+### Pros y Contras
+
+| ✅ Pros | ❌ Contras |
+|---|---|
+| Hardware 55% más barato que NVIDIA | Latencia E2E mayor (~1,000ms vs ~700ms de C#3) |
+| LLM local incluido (Ollama) — $0 por llamada | ROCm menos maduro que CUDA, más bugs |
+| Costo por minuto más bajo de todas las opciones | Menos documentación y comunidad que NVIDIA |
+| Clonación de voz Vera en segundos (XTTS) | Fine-tuning del LLM local requiere validación en español |
+| Sin dependencia de ninguna API externa | Mayor tiempo de desarrollo (+2.5 días vs C#3) |
+| Escalable agregando más GPUs AMD | Llama 3.1 8B puede ser menos preciso que Claude en objeciones complejas |
+
+### Resumen ejecutivo
+
+| Concepto | Monto |
+|---|---|
+| **Desarrollo (única vez)** | **$1,080 USD** |
+| **Hardware GPU (RX 7900 XTX + servidor)** | **$1,300 USD** |
+| **Costo por minuto (totalmente self-hosted)** | **~$0.004 USD/min** |
+| **Costo llamada promedio 4 min** | **~$0.016 USD** |
+| Infraestructura mensual — 1,000 llamadas/día | **~$504 USD** |
+| Infraestructura mensual — 5,000 llamadas/día | **~$1,560 USD** |
+| **Tiempo de entrega** | **20 días hábiles** |
+| GPU recomendada | RX 7900 XTX (24 GB VRAM) |
+
+---
+
+## Tabla resumen — las 4 cotizaciones
+
+| | C#1 | C#2 | C#3 | C#4 |
+|---|---|---|---|---|
+| **Stack** | ElevenLabs + Telnyx | ElevenLabs + SIP propio | NVIDIA Riva + Claude Haiku | AMD ROCm + Ollama local |
+| **Desarrollo** | $540 | $870 | $990 | $1,080 |
+| **Tiempo entrega** | 9 días | 14.5 días | 17.5 días | 20 días |
+| **Costo/min** | $0.1045 | $0.1010 | $0.009 | $0.004 |
+| **Llamada 4 min** | $0.418 | $0.404 | $0.036 | $0.016 |
+| **1K llamadas/día/mes** | $13,365 | $13,020 | $936 | $504 |
+| **5K llamadas/día/mes** | $63,525 | $61,575 | $3,000* | $1,560 |
+| **Dependencias externas** | ElevenLabs + Telnyx | ElevenLabs + mayorista | Claude API + mayorista | Solo mayorista SIP |
+| **Complejidad operativa** | Baja | Media | Alta | Muy alta |
+| **Escalabilidad** | Ilimitada (cloud) | Ilimitada (cloud) | Horizontal (GPUs) | Horizontal (GPUs) |
+| **Latencia estimada** | ~400ms | ~400ms | ~700ms | ~1,000ms |
+
+*C#3 a 5K llamadas/día requiere 4× GPU A10G (~$1,440 cloud) + SIP + LLM.
+
+**Cuándo elegir cada una:**
+
+| Si... | Elige |
+|---|---|
+| Necesitas arrancar en < 2 semanas y el volumen es bajo | **C#1** |
+| Ya tienes > 400 llamadas/día y quieres reducir SIP | **C#2** |
+| El volumen justifica self-hosted y tienes operador DevOps | **C#3** |
+| Quieres máximo ahorro, no importa la latencia +300ms extra | **C#4** |
+| El volumen crece a 3,000+ llamadas/día | **C#3 + escalabilidad horizontal** |
