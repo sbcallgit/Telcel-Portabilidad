@@ -54,6 +54,21 @@ def _fmt_duracion(segs: float) -> str:
     return f"{s}s"
 
 
+@router.get("/bitrix/auth")
+async def bitrix_oauth_start() -> HTMLResponse:
+    """Inicia el flujo OAuth — redirige al portal de Bitrix24 para autorización."""
+    from fastapi.responses import RedirectResponse
+    domain = settings.bitrix_webhook_url.split("/rest/")[0].replace("https://", "")
+    redirect_uri = f"{settings.bitrix_public_url}/bitrix/app"
+    url = (
+        f"https://{domain}/oauth/authorize/"
+        f"?client_id={settings.bitrix_client_id}"
+        f"&response_type=code"
+        f"&redirect_uri={redirect_uri}"
+    )
+    return RedirectResponse(url)
+
+
 @router.get("/bitrix/app", response_class=HTMLResponse)
 async def bitrix_oauth_callback(code: str = Query(default="")) -> str:
     """Recibe el código de autorización OAuth y lo intercambia por tokens."""
