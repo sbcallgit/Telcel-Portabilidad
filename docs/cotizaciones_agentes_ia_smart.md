@@ -810,3 +810,170 @@ Si no se quiere operar el servidor de LiveKit propio:
 | C#5 | $1,470 | **$1,170** | 25.5 días | **20.5 días** |
 
 > Aplicar LiveKit a todas las cotizaciones reduce el costo total de desarrollo en un promedio de **$210 USD y 3.3 días por proyecto**. Para C#5, el ahorro es de $300 y 5 días — el más significativo porque es donde más código custom se elimina.
+
+---
+
+## Cotización #6 — Plataforma Multi-Cliente de Agentes IA
+
+### Concepto
+
+Las cotizaciones C#1–C#5 resuelven el stack técnico de **un** agente para **un** cliente. C#6 es una capa distinta: convierte ese agente en una **plataforma reutilizable** donde cada cliente nuevo se incorpora en 2–3 días de configuración en lugar de 2–3 semanas de desarrollo.
+
+> C#6 no reemplaza a C#1–C#5 — se construye **sobre** cualquiera de ellas. Es el nivel de abstracción que separa la infraestructura (motor del agente) de la configuración (comportamiento por cliente).
+
+### El problema que resuelve
+
+| Situación actual | Con plataforma multi-cliente |
+|---|---|
+| Cliente nuevo = replicar todo el repositorio | Cliente nuevo = wizard de onboarding |
+| Prompts hardcodeados por proyecto | Prompts editables por cliente en panel admin |
+| Pipeline Telcel-específico en el código | Pipeline configurable por YAML o base de datos |
+| Dashboard duplicado por cliente | Dashboard multi-tenant con vistas por cliente |
+| Credenciales mezcladas en `.env` | Credenciales aisladas por tenant en BD cifrada |
+| 2–3 semanas para incorporar cliente #3 | **2–3 días para incorporar cliente #N** |
+
+### Arquitectura multi-tenant
+
+```
+                    ┌─────────────────────────────┐
+                    │     Panel Admin (web)        │
+                    │  Onboarding · Prompts · CRM  │
+                    └──────────────┬──────────────┘
+                                   │
+                    ┌──────────────▼──────────────┐
+                    │       Config Store           │
+                    │  PostgreSQL — tabla tenants  │
+                    │  pipeline · prompts · creds  │
+                    └──────────────┬──────────────┘
+                                   │
+          ┌────────────────────────▼──────────────────────────┐
+          │                  Motor del Agente                  │
+          │         (LangGraph / FSM — genérico)               │
+          │                                                     │
+          │  Tenant A (Telcel)   Tenant B (Megacable)   Tenant C...  │
+          │  phone_prefix: tel_  phone_prefix: mg_      ...          │
+          │  crm: Bitrix90       crm: Bitrix91           crm: HubSpot │
+          │  prompts: telcel/*   prompts: megacable/*   ...          │
+          └──────────┬────────────────┬────────────────┬──────┘
+                     │                │                │
+              WhatsApp A        WhatsApp B        WhatsApp C
+```
+
+### Qué es común (infraestructura compartida)
+
+| Componente | Estado actual | En plataforma |
+|---|---|---|
+| Motor LangGraph / FSM | Telcel-específico | Genérico, parametrizable |
+| Debounce Redis | Usa prefijo `phone` | Usa prefijo `{tenant}:{phone}` |
+| Checkpointing PostgreSQL | Thread por teléfono | Thread por `{tenant}:{phone}` |
+| Dashboard KPI Angular | Un solo cliente | Multi-tenant + super-admin |
+| Sistema de seguimientos | Hardcoded Telcel | Configurable por tenant |
+| Canal WhatsApp | Una cuenta | Multi-cuenta routing |
+
+### Qué es configurable por cliente (sin tocar código)
+
+| Configuración | Mecanismo |
+|---|---|
+| Prompts y personalidad del agente | Editor web en panel admin — guarda en BD |
+| Etapas del funnel y condiciones | YAML por tenant — carga en runtime |
+| CRM destino | Plugin selector: Bitrix24 / HubSpot / Salesforce / ninguno |
+| Promos, LADAs, base de conocimiento | Seed por tenant — comando `make seed tenant=X` |
+| Credenciales WhatsApp Business | Cifradas en BD por tenant |
+| Branding del dashboard | Logo, colores, nombre por tenant |
+| LLM a usar | Claude / Ollama / OpenAI — configurable por tenant |
+
+### Costo de desarrollo
+
+| Módulo | Días | Horas |
+|---|---|---|
+| Multi-tenant DB (row-level security + namespacing Redis) | 3.0 | 24 |
+| Config store: tabla `tenants` + sistema de prompts por BD | 3.0 | 24 |
+| Generalización del motor del agente (quitar hardcoding Telcel) | 3.0 | 24 |
+| Plugin de CRM: Bitrix24 adapter + HubSpot adapter | 3.0 | 24 |
+| Multi-cuenta WhatsApp routing por tenant | 2.0 | 16 |
+| Panel admin: gestión de tenants + onboarding wizard | 5.0 | 40 |
+| Editor de prompts web (por tenant) | 2.0 | 16 |
+| Dashboard multi-tenant (super-admin + vista por cliente) | 3.0 | 24 |
+| Gestión de base de conocimiento por tenant (promos, LADAs) | 2.0 | 16 |
+| Sistema de seguimientos configurable por tenant | 1.5 | 12 |
+| Testing onboarding de segundo cliente real (Megacable) | 3.0 | 24 |
+| Documentación de onboarding para clientes nuevos | 1.5 | 12 |
+| **Total** | **32 días** | **256 h** |
+
+| Concepto | Horas | Tarifa | Total |
+|---|---|---|---|
+| **Total desarrollo (única vez)** | **256 h** | **$7.50/h** | **$1,920 USD** |
+
+### Infraestructura adicional
+
+La plataforma corre sobre la misma infraestructura existente. Los únicos costos adicionales son:
+
+| Concepto | Costo mensual |
+|---|---|
+| PostgreSQL extra (schemas por tenant) | $0 — mismo servidor |
+| Redis namespacing | $0 — mismo servidor |
+| Segundo número WhatsApp Business | ~$15–30 USD/mes por cliente |
+| **Total adicional/mes** | **~$15–30 por cliente nuevo** |
+
+### Tiempo para incorporar un cliente nuevo (post-plataforma)
+
+| Tarea | Tiempo |
+|---|---|
+| Crear tenant en panel admin | 15 min |
+| Configurar prompts y personalidad | 4 h |
+| Configurar pipeline (etapas, condiciones) | 2 h |
+| Conectar CRM (Bitrix24 / HubSpot) | 2 h |
+| Cargar base de conocimiento (promos, LADAs) | 2 h |
+| Conectar número WhatsApp Business | 1 h |
+| QA básico de la conversación | 3 h |
+| **Total por cliente nuevo** | **~14 h = 2 días** |
+
+> Sin plataforma: el mismo proceso toma 2–3 semanas de desarrollo.
+
+### Modelo de negocio habilitado
+
+Una vez construida la plataforma, cada cliente nuevo genera ingresos con costo de incorporación mínimo:
+
+| Concepto | Valor sugerido |
+|---|---|
+| Setup fee por cliente nuevo | $500–1,000 USD (única vez) |
+| Mensualidad SaaS por cliente | $200–500 USD/mes |
+| Costo operativo por cliente (infraestructura) | ~$30–100 USD/mes |
+| **Margen por cliente/mes** | **$100–470 USD** |
+
+Con 10 clientes activos: **$1,000–4,700 USD/mes de margen recurrente** sobre infraestructura compartida.
+
+### Combinación con C#1–C#5
+
+C#6 se construye encima de cualquier stack de voz:
+
+| Combinación | Descripción | Costo total desarrollo |
+|---|---|---|
+| C#6 + C#1 | Plataforma multi-cliente con voz ElevenLabs | $1,920 + $360* = **$2,280** |
+| C#6 + C#3 | Plataforma multi-cliente con voz NVIDIA self-hosted | $1,920 + $810* = **$2,730** |
+| C#6 + C#5 | Plataforma multi-cliente con independencia total | $1,920 + $1,170* = **$3,090** |
+
+*Con modificador LiveKit aplicado.
+
+### Pros y Contras
+
+| ✅ Pros | ❌ Contras |
+|---|---|
+| Escala a N clientes sin costo de desarrollo lineal | Mayor inversión inicial que un agente único |
+| Ingresos recurrentes SaaS por cliente | Requiere disciplina de abstracción desde el inicio |
+| Reutiliza ~65% del código existente (Telcel + Megacable) | Panel admin agrega complejidad de mantenimiento |
+| Diferenciador comercial — producto propio vs servicio único | Onboarding de clientes con CRMs distintos requiere adaptadores |
+| Cambios de prompt sin tocar código ni rebuild | |
+| Cada cliente ve solo sus datos (tenant isolation) | |
+
+### Resumen ejecutivo
+
+| Concepto | Monto |
+|---|---|
+| **Desarrollo (única vez)** | **$1,920 USD** |
+| **Infraestructura adicional/mes** | **~$30 USD por cliente** |
+| **Tiempo de incorporación de cliente nuevo** | **~2 días** |
+| **Tiempo de entrega de la plataforma** | **32 días hábiles** |
+| **Reutilización de código existente** | **~65%** |
+| **Clientes para recuperar la inversión** | **~4 clientes** (a $500 setup fee) |
+| **Margen mensual con 10 clientes** | **$1,000–4,700 USD/mes** |
