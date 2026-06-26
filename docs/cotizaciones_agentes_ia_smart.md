@@ -687,3 +687,126 @@ Asumiendo **1,000 conversaciones de texto/día + 200 llamadas/día**:
 | Quieres máximo ahorro en voz, no importa la latencia extra | **C#4** |
 | Quieres independencia total y proyectas múltiples clientes | **C#5** |
 | El volumen crece a 3,000+ llamadas/día | **C#3 o C#5 + escalabilidad horizontal** |
+
+---
+
+## Modificador: LiveKit como infraestructura de medios
+
+### Qué es LiveKit
+
+LiveKit es un stack open source de infraestructura de audio/video en tiempo real compuesto por tres módulos:
+
+| Módulo | Propósito | Costo |
+|---|---|---|
+| **LiveKit Server** | SFU WebRTC — enruta audio entre participantes en tiempo real | Open source — $0 self-hosted |
+| **LiveKit Agents** | Framework Python para agentes de voz: VAD, STT, LLM, TTS, barge-in | Open source — $0 |
+| **LiveKit SIP** | Bridge SIP ↔ WebRTC — conecta llamadas PSTN con rooms de LiveKit | Open source — $0 self-hosted |
+
+LiveKit Agents resuelve de forma nativa los problemas más difíciles de un pipeline de voz:
+- **VAD incluido** (Silero VAD local, gratis) — detecta cuándo el lead terminó de hablar
+- **Barge-in** — el bot se detiene cuando el cliente lo interrumpe
+- **Streaming de audio** — ASR y TTS chunk por chunk sin buffer manual
+- **Reconexión automática** ante drops de red
+- **Plugin architecture** — intercambia STT/TTS/LLM con una línea de código
+
+### Arquitectura con LiveKit
+
+```
+Llamada SIP (cualquier trunk)
+        ↓
+LiveKit SIP Server  ←── reemplaza Asterisk completamente
+        ↓
+LiveKit Room (WebRTC)
+        ↓
+LiveKit Agent (Python)
+    ├── VAD:  Silero (local, gratis)
+    ├── STT:  ElevenLabs │ Whisper │ faster-whisper │ Riva  (plugin)
+    ├── LLM:  Claude │ Llama 70B │ Ollama │ Groq             (plugin)
+    └── TTS:  ElevenLabs │ Coqui XTTS │ Riva │ Cartesia      (plugin)
+        ↓
+Audio → Room → SIP → Lead
+```
+
+El agente Python queda reducido a ~50 líneas de lógica de negocio; la infraestructura de medios la opera LiveKit.
+
+### Impacto en cada cotización
+
+#### Ahorro en tiempo de desarrollo
+
+| Cotización | Módulos que elimina LiveKit | Días ahorrados | Horas ahorradas | Ahorro $ |
+|---|---|---|---|---|
+| C#1 ElevenLabs + Telnyx | Pipeline WebSocket custom + integración SIP | 3.0 días | 24 h | **$180** |
+| C#2 ElevenLabs + SIP propio | Asterisk setup + AGI/ARI + pipeline audio | 3.5 días | 28 h | **$210** |
+| C#3 NVIDIA Riva | Asterisk + pipeline gRPC streaming custom | 3.0 días | 24 h | **$180** |
+| C#4 AMD ROCm | Asterisk + pipeline audio custom + VAD manual | 3.0 días | 24 h | **$180** |
+| C#5 Independencia total | Asterisk + pipeline completo + VAD + barge-in | **5.0 días** | **40 h** | **$300** |
+
+#### Costos ajustados con LiveKit (self-hosted)
+
+| Cotización | Desarrollo original | **Con LiveKit** | Tiempo original | **Con LiveKit** |
+|---|---|---|---|---|
+| C#1 | $540 | **$360** | 9 días | **6 días** |
+| C#2 | $870 | **$660** | 14.5 días | **11 días** |
+| C#3 | $990 | **$810** | 17.5 días | **14.5 días** |
+| C#4 | $1,080 | **$900** | 20 días | **17 días** |
+| C#5 | $1,470 | **$1,170** | 25.5 días | **20.5 días** |
+
+> Los costos operativos por minuto no cambian — LiveKit self-hosted no tiene costo por uso. Los ahorros son exclusivamente en desarrollo.
+
+#### Costo de LiveKit Cloud (alternativa sin self-hosting)
+
+Si no se quiere operar el servidor de LiveKit propio:
+
+| Componente | Costo |
+|---|---|
+| LiveKit Cloud — hasta 100 participantes concurrentes | $0/mes |
+| LiveKit Cloud — producción | $0.002/min por participante |
+| Impacto en costo/llamada 4 min | +$0.008 USD |
+| Impacto en 1,000 llamadas/día | +$240/mes |
+
+> Para C#1 y C#2 (donde ElevenLabs ya domina el costo), el +$240/mes de LiveKit Cloud es marginal y elimina la operación del servidor. Para C#3, C#4 y C#5 se recomienda self-hosted.
+
+### Plugins nativos disponibles en LiveKit Agents
+
+| Categoría | Plugins oficiales | Compatible con |
+|---|---|---|
+| **STT** | Deepgram, AssemblyAI, Azure, Google, OpenAI Whisper | C#1, C#2 |
+| **STT custom** | Interface `STT` base — implementar con faster-whisper o Riva | C#3, C#4, C#5 |
+| **TTS** | ElevenLabs, Azure, Google, Cartesia, OpenAI | C#1, C#2 |
+| **TTS custom** | Interface `TTS` base — implementar con Coqui XTTS o Riva | C#3, C#4, C#5 |
+| **LLM** | OpenAI, Anthropic (Claude), Groq, **Ollama** | Todas |
+| **VAD** | Silero VAD (local, gratis) | Todas |
+
+### Beneficios adicionales vs pipeline custom
+
+| Característica | Pipeline custom (sin LiveKit) | Con LiveKit Agents |
+|---|---|---|
+| VAD / detección fin de turno | Implementar manual (~1 día) | Incluido (Silero VAD) |
+| Barge-in (cliente interrumpe bot) | Complejo (~1.5 días) | Incluido |
+| Streaming ASR chunk por chunk | Implementar manual | Incluido |
+| Manejo de reconexiones | Implementar manual | Incluido |
+| Métricas de latencia built-in | No | Sí (TTFT, TTFB por componente) |
+| Swap de proveedor STT/TTS | Refactoring de código | Cambio de plugin (1 línea) |
+| Soporte WebRTC nativo (web/móvil) | No (solo SIP) | Sí — mismo agent para app web |
+
+### Recomendación de uso por cotización
+
+| Cotización | LiveKit self-hosted | LiveKit Cloud | Impacto |
+|---|---|---|---|
+| C#1 ElevenLabs + Telnyx | ✅ Recomendado | ✅ Alternativa simple | Alto — simplifica integración ElevenLabs |
+| C#2 ElevenLabs + SIP propio | ✅ Recomendado | ⚠️ Añade costo | Alto — reemplaza Asterisk por completo |
+| C#3 NVIDIA Riva | ✅ Recomendado | ❌ No usar | Alto — plugin custom Riva en framework estable |
+| C#4 AMD ROCm | ✅ Recomendado | ❌ No usar | Alto — plugin custom faster-whisper + XTTS |
+| C#5 Independencia total | ✅ **Esencial** | ❌ No usar | **Máximo** — reduce 5 días de desarrollo crítico |
+
+### Tabla resumen con y sin LiveKit
+
+| Cotización | Desarrollo sin LiveKit | **Desarrollo con LiveKit** | Tiempo sin | **Tiempo con** |
+|---|---|---|---|---|
+| C#1 | $540 | **$360** | 9 días | **6 días** |
+| C#2 | $870 | **$660** | 14.5 días | **11 días** |
+| C#3 | $990 | **$810** | 17.5 días | **14.5 días** |
+| C#4 | $1,080 | **$900** | 17 días | **17 días** |
+| C#5 | $1,470 | **$1,170** | 25.5 días | **20.5 días** |
+
+> Aplicar LiveKit a todas las cotizaciones reduce el costo total de desarrollo en un promedio de **$210 USD y 3.3 días por proyecto**. Para C#5, el ahorro es de $300 y 5 días — el más significativo porque es donde más código custom se elimina.
