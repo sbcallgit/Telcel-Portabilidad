@@ -155,6 +155,8 @@ bot_telcel_portabilidad/
 | `/admin/utm-data` | GET | Atribución UTM desde tabla `leads` — por campaña, fuente y ad_id |
 | `/admin/megacable-data` | GET | KPIs del agente Megacable desde BD externa |
 | `/admin/bitrix-eventos-seed` | POST | Puebla `bitrix_eventos` desde `kpi_conversaciones` existente (migración inicial) |
+| `/admin/conversation/{id}` | GET | Detalle completo de una conversación: resumen, mensajes, costos por mensaje del bot y trazabilidad del pipeline |
+| `/admin/bitrix-placement-bind` | POST | Registra el placement `CRM_DEAL_DETAIL_TAB` en Bitrix24 (ejecutar una sola vez tras OAuth) |
 
 Todos los endpoints aceptan `X-Admin-Token` (header) **o** `Authorization: Bearer <JWT>`.
 
@@ -386,7 +388,7 @@ im.dialog.messages.get → _forward_to_user() → Telegram o WhatsApp
 - **Mensajes del bot:** `send_bot_message()` usa `imconnector.send.messages` con el **mismo `user.id = phone`** que el usuario real. Usar un `user.id` diferente (ej. `"bot_{phone}"`) hace que imconnector abra una segunda sesión de Open Lines → segundo deal duplicado. El prefijo `"🤖 Vera |"` en el texto distingue visualmente las respuestas del bot. `im.message.add` no funciona en chats de Open Lines (error `CANCELED: No puede enviar mensajes al chat especificado`).
 - **Deal asíncrono:** Bitrix crea el deal via Open Lines de forma asíncrona. `_fetch_openlines_deal_async()` espera 3s y busca el deal con `buscar_deal_por_telefono()`, guardándolo en Redis `connector_deal:{phone}` antes de que el debounce (10s) dispare. Así `validacion_node` reutiliza el deal de Open Lines en lugar de crear un fallback sin vínculo al canal.
 - **Conector activo:** `telegram_ai_agent` (ya registrado en el portal b24-ahyle8.bitrix24.mx, activado en línea 542). No usar conectores nuevos — registrar uno nuevo con una app local requiere placement handler de marketplace.
-- **Registro OAuth:** flujo en `GET /bitrix/auth` → Bitrix redirige a `BITRIX_PUBLIC_URL/bitrix/app` → tokens en Redis `bitrix:oauth_tokens`. Re-ejecutar si expira el refresh_token.
+- **Registro OAuth:** flujo en `GET /bitrix/auth` → redirige al portal de Bitrix24 para aprobar permisos → Bitrix devuelve `?code=` a `BITRIX_PUBLIC_URL/bitrix/app` → tokens en Redis `bitrix:oauth_tokens`. Re-ejecutar si expira el refresh_token o si se agregan nuevos scopes a la app. El scope `placement` es obligatorio para el embed del deal (ver sección "Embed de conversación en Bitrix24").
 - **Polling concurrente:** `_poll_once` procesa todos los teléfonos activos en paralelo con `asyncio.gather`. El polling usa `_call_poll` (sin reintentos, timeout 20s) para no bloquear el ciclo si Bitrix tarda.
 
 ---
@@ -611,6 +613,73 @@ Ambos endpoints retornan `{"status": "started"}` inmediatamente y corren en back
 
 ---
 
+## Embed de conversación en Bitrix24 (pestaña del deal)
+
+Cada deal del pipeline 90 tiene una pestaña **"Vera · Conversación"** que muestra el historial completo de la conversación del bot directamente dentro del CRM, sin salir de Bitrix24.
+
+### Cómo funciona
+
+```
+Asesor abre un deal en Bitrix24
+        ↓
+Clic en pestaña "Vera · Conversación" (CRM_DEAL_DETAIL_TAB)
+        ↓
+Bitrix POST a /bitrix/deal-embed con AUTH_ID + PLACEMENT_OPTIONS{"ID": deal_id}
+        ↓
+El endpoint valida el token contra profile.json del portal
+        ↓
+Busca id_conversacion: leads.bitrix_lead_id → bitrix_eventos.deal_id (fallback)
+        ↓
+HTML self-contained con KPI cards + tabla de mensajes + pipeline de stages
+```
+
+### Endpoint
+
+**`POST /bitrix/deal-embed`** — handler del placement. Recibe form-encoded de Bitrix:
+- `AUTH_ID` — access token del usuario que abre la pestaña (validado contra el portal)
+- `DOMAIN` — dominio del portal (ej. `b24-ahyle8.bitrix24.mx`)
+- `PLACEMENT_OPTIONS` — JSON `{"ID": "<deal_id>"}`
+
+Devuelve HTML self-contained (sin dependencias externas) con:
+- KPI cards: mensajes bot / usuario / asesor / costo total USD + tokens
+- Resumen AI y motivo de escalamiento
+- Tabla cronológica de mensajes con badge por actor, costo y tokens (solo bot)
+- Trazabilidad del pipeline: tarjetas scrolleables con stage, fecha y duración
+
+### Setup inicial (una sola vez)
+
+**1. Autorizar la app con scope `placement`:**
+```
+Abrir en navegador: https://telegram-portabilidad.callcomcc.io/bitrix/auth
+```
+Esto redirige al portal de Bitrix24 para aprobar permisos. Al ver "✅ Autorización exitosa" el token queda guardado en Redis con el scope `placement`.
+
+**Prerequisito:** la app local en el portal debe tener `placement` en su lista de scopes antes de abrir la URL.
+
+**2. Registrar el placement:**
+```bash
+curl -X POST https://portabilidad.callcomcc.io/admin/bitrix-placement-bind \
+  -H "X-Admin-Token: <ADMIN_TOKEN>"
+# Respuesta exitosa: {"status": "ok", "bitrix_result": {"result": true, ...}}
+```
+
+### Re-autorización
+
+Si el refresh_token expira o se agregan nuevos scopes a la app:
+1. Abrir `https://telegram-portabilidad.callcomcc.io/bitrix/auth` en el navegador
+2. Aprobar en el portal de Bitrix24
+3. Si cambiaron los scopes, volver a ejecutar `bitrix-placement-bind`
+
+### Notas técnicas
+
+- **Parsing form-encoded:** usa `request.body()` + `parse_qs` (no `request.form()`) — no requiere `python-multipart`.
+- **Lookup de conversación:** busca primero en `leads.bitrix_lead_id = deal_id`; si no encuentra, busca en `bitrix_eventos.deal_id`; último fallback `deal_id = id_conversacion` (deals creados por Open Lines).
+- **Validación del token:** llama `GET https://{DOMAIN}/rest/profile.json?auth={AUTH_ID}`. Si la validación falla por red, continúa mostrando los datos (mejor experiencia que bloquear).
+- **HTML self-contained:** estilos inline, sin CDN ni assets externos — funciona dentro del iframe de Bitrix aunque el portal no tenga acceso a recursos externos.
+- **Scope `placement` en webhooks:** NO disponible para webhooks entrantes de Bitrix24 — solo para apps OAuth. No intentar via webhook.
+
+---
+
 ## Trazabilidad de eventos Bitrix (`bitrix_eventos`)
 
 Tabla independiente de `kpi_conversaciones`. Una fila por evento del canal Bitrix Open Lines: mensajes (usuario/bot/humano) y cambios de stage. Permite reconstruir el timeline completo de cada deal con duración exacta entre stages.
@@ -769,14 +838,16 @@ Panel web en `dashboard/` — accesible en `https://portabilidad.callcomcc.io/da
 
 ### Secciones del dashboard
 
-1. **Telcel Portabilidad** — KPI cards, distribución por stage (doughnut), mensajes por actor (bar), tabla de conversaciones paginada con filtros (fecha, stage, búsqueda)
-2. **Meta Ads — Portabilidad 2 Callcom** — gasto, impresiones, clics, CTR, conversaciones WhatsApp, CPL; gráfica gasto vs conversaciones; tabla detallada. Filtro por fecha y nivel (campaña/conjunto/anuncio)
-3. **Atribución UTM** — leads con UTM capturado, ventas atribuidas; gráfica por fuente; tabla por campaña con tasa de conversión; tabla por Ad ID
-4. **Megacable** — KPI cards del agente Megacable (BD externa), gráficas de estado y mensajes por actor, tabla de conversaciones recientes. Filtro por fecha independiente
+1. **Telcel Portabilidad** — KPI cards, distribución por stage (doughnut), mensajes por actor (bar), tabla de conversaciones paginada con filtros (fecha, stage, búsqueda). Cada fila de la tabla es clickeable y navega al detalle de la conversación (`/conversation/:id`).
+2. **Detalle de conversación** (`/conversation/:id`) — KPI cards (mensajes bot/usuario/asesor, costo total USD + tokens), resumen AI, tabla cronológica de mensajes con costo y tokens por mensaje del bot, y trazabilidad del pipeline con tarjetas horizontales scrolleables por transición de stage.
+3. **Meta Ads — Portabilidad 2 Callcom** — gasto, impresiones, clics, CTR, conversaciones WhatsApp, CPL; gráfica gasto vs conversaciones; tabla detallada. Filtro por fecha y nivel (campaña/conjunto/anuncio)
+4. **Atribución UTM** — leads con UTM capturado, ventas atribuidas; gráfica por fuente; tabla por campaña con tasa de conversión; tabla por Ad ID
+5. **Megacable** — KPI cards del agente Megacable (BD externa), gráficas de estado y mensajes por actor, tabla de conversaciones recientes. Filtro por fecha independiente
 
 ### Notas del dashboard
 
 - **`@ViewChild` + `@if`:** los canvas de Chart.js viven dentro de bloques `@if` de Angular. `renderCharts()` se llama con `setTimeout(0)` después de setear `loading = false` para asegurar que el DOM ya renderizó antes de acceder al canvas. Sin el `setTimeout`, el `@ViewChild` devuelve `undefined`.
+- **Detalle de conversación:** los datos vienen de `bitrix_eventos` (mensajes + costos) y `kpi_conversaciones` (resumen). El componente `ConversationDetailComponent` en `dashboard/src/app/pages/conversation-detail/` es standalone con estilos inline. El backend agrega todo en `GET /admin/conversation/{id}` con 3 queries SQL.
 - **Rebuild:** cualquier cambio en `dashboard/` requiere `docker compose build dashboard && docker compose up -d dashboard`.
 
 ---
