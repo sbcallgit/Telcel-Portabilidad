@@ -183,4 +183,145 @@ En lugar de pagar a Telnyx/Vonage/Twilio por minuto, se monta infraestructura SI
 
 ---
 
-<!-- Cotización #3 se agregará aquí al ser aceptada -->
+## Cotización #3 — Agente de Voz Self-Hosted con NVIDIA Riva + LLM
+
+### Concepto
+
+Eliminar completamente ElevenLabs. El ASR (voz → texto), TTS (texto → voz) y el LLM corren en infraestructura propia con GPU NVIDIA. ElevenLabs pasa de ser un servicio a ser un costo operativo eliminado.
+
+### Stack completo
+
+| Componente | Tecnología | Propósito |
+|---|---|---|
+| **ASR** | NVIDIA Riva (Conformer-CTC español) | Transcribe audio del lead en tiempo real, streaming por palabras |
+| **TTS** | NVIDIA Riva (FastPitch + HiFiGAN español) | Sintetiza voz de Vera con modelos locales |
+| **LLM** | Claude Haiku (API) o NVIDIA NIM local | Genera respuestas conversacionales |
+| **Orquestación** | Pipeline Python (gRPC ↔ Riva) | Loop en tiempo real ASR → LLM → TTS |
+| **SIP** | Asterisk + trunk mayorista | Llamadas salientes a México (igual que C#2) |
+| **Trigger** | FastAPI endpoint + Bitrix24 | Disparar llamada desde el deal |
+
+### Flujo de audio en tiempo real
+
+```
+Lead habla
+    ↓
+Asterisk captura RTP
+    ↓
+Riva ASR (gRPC streaming) → texto parcial por palabras
+    ↓
+Detección fin de turno (VAD)
+    ↓
+Claude Haiku API → respuesta texto
+    ↓
+Riva TTS (gRPC streaming) → audio chunk por chunk
+    ↓
+Asterisk reproduce al lead
+    ↓
+(loop hasta fin de llamada)
+```
+
+### Costo de desarrollo
+
+| Módulo | Días | Horas |
+|---|---|---|
+| NVIDIA Riva setup + configuración GPU | 1.5 | 12 |
+| Modelos ASR español (descarga + tuning) | 1.0 | 8 |
+| Modelos TTS español + voz personalizada Vera | 1.0 | 8 |
+| Pipeline ASR streaming (gRPC) | 2.0 | 16 |
+| Pipeline TTS streaming (gRPC) | 1.5 | 12 |
+| Integración LLM (Claude Haiku) | 1.0 | 8 |
+| Orquestación ASR → LLM → TTS en tiempo real | 2.0 | 16 |
+| Asterisk + SIP trunk mayorista | 2.0 | 16 |
+| FastAPI endpoint + trigger Bitrix24 | 0.5 | 4 |
+| Contexto del lead al agente | 1.0 | 8 |
+| Optimización de latencia (< 800ms E2E) | 1.0 | 8 |
+| Testing QA end-to-end | 2.0 | 16 |
+| **Total** | **17.5 días** | **132 h** |
+
+| Concepto | Horas | Tarifa | Total |
+|---|---|---|---|
+| **Total desarrollo (única vez)** | **132 h** | **$7.50/h** | **$990 USD** |
+
+### GPU requerida — opciones de infraestructura
+
+#### Opción A — GPU en la nube (sin inversión inicial)
+
+| Instancia | GPU | VRAM | Llamadas simultáneas | Costo/mes (reserved) |
+|---|---|---|---|---|
+| AWS G5.xlarge | A10G | 24 GB | ~20–30 | ~$360 |
+| AWS G5.2xlarge | A10G | 24 GB | ~30–50 | ~$520 |
+| AWS P3.2xlarge | V100 | 16 GB | ~15–25 | ~$720 |
+| GCP A2 (A100 40GB) | A100 | 40 GB | ~80–120 | ~$1,200 |
+
+> Para 1,000 llamadas/día el pico real simultáneo es ~15–20 llamadas. Una instancia G5.xlarge (~$360/mes) es suficiente.
+
+#### Opción B — Hardware propio (inversión única)
+
+| Hardware | VRAM | Llamadas simultáneas | Costo único | Servidor/mes |
+|---|---|---|---|---|
+| RTX 4090 | 24 GB | ~20–30 | $1,800 USD | $80 |
+| A10G (enterprise) | 24 GB | ~30–50 | $3,500 USD | $80 |
+| A100 40GB | 40 GB | ~80–120 | $12,000 USD | $100 |
+
+### Costo por minuto — desglose
+
+| Componente | Costo/min |
+|---|---|
+| Riva ASR (local) | $0 |
+| Riva TTS (local) | $0 |
+| Claude Haiku (~6K tokens/llamada) | ~$0.002 |
+| SIP trunk mayorista (Limecom) | $0.001 |
+| GPU amortizada (A10G cloud, 60K min/mes) | ~$0.006 |
+| **Total/min** | **~$0.009** |
+
+### Comparativa de costo por minuto — las 3 cotizaciones
+
+| Cotización | Tecnología | Costo/min | Costo llamada 4 min |
+|---|---|---|---|
+| #1 ElevenLabs + Telnyx | Cloud | $0.1045 | $0.418 |
+| #2 ElevenLabs + SIP propio | Cloud + SIP | $0.1010 | $0.404 |
+| **#3 NVIDIA Riva self-hosted** | **Self-hosted** | **$0.009** | **$0.036** |
+
+> Cotización #3 es ~11× más barata por minuto que las alternativas con ElevenLabs.
+
+### Infraestructura mensual comparada (Opción A — GPU cloud G5.xlarge)
+
+| Volumen | C#1 ElevenLabs | C#2 SIP propio | **C#3 NVIDIA** |
+|---|---|---|---|
+| 100 llamadas/día (12K min) | $2,079 | $2,121 | **$504** |
+| 500 llamadas/día (60K min) | $7,095 | $6,960 | **$660** |
+| 1,000 llamadas/día (120K min) | $13,365 | $13,020 | **$936** |
+| 5,000 llamadas/día (600K min) | $63,525 | $61,575 | **$3,060** |
+
+> A 1,000 llamadas/día C#3 cuesta ~$936/mes vs ~$13,365 de C#1 — ahorro de **$12,429/mes**.
+
+### Punto de equilibrio vs C#1
+
+Inversión extra vs C#1: $990 − $540 = **$450 USD adicionales**  
+Ahorro mensual a 500 llamadas/día: $7,095 − $660 = **$6,435/mes**  
+Recuperación de la inversión adicional: **< 3 días de operación**
+
+### Pros y Contras
+
+| ✅ Pros | ❌ Contras |
+|---|---|
+| 11× más barato por minuto que ElevenLabs | Requiere GPU NVIDIA (CUDA — no AMD sin cambiar stack) |
+| Costo prácticamente fijo independiente del volumen | Mayor complejidad de desarrollo (+8.5 días vs C#1) |
+| Voz 100% personalizable (entrenas la voz de Vera) | Requiere operar Riva, Asterisk y GPU |
+| Sin costo por minuto de plataforma tercera | Latencia puede subir si GPU está saturada |
+| Audio nunca sale de tu infraestructura (privacidad total) | Curva de aprendizaje para operar Riva en producción |
+| Escalable horizontalmente agregando GPUs | |
+| Reutilizable para cualquier otro proyecto de voz | |
+
+### Resumen ejecutivo
+
+| Concepto | Opción A (GPU cloud) | Opción B (hardware propio) |
+|---|---|---|
+| **Desarrollo (única vez)** | **$990 USD** | **$990 USD** |
+| **Inversión hardware GPU** | $0 | $1,800–12,000 USD |
+| **Costo por minuto** | **~$0.009** | **~$0.003** |
+| **Costo llamada promedio 4 min** | **$0.036** | **$0.012** |
+| Infraestructura mensual — 1,000 llamadas/día | **~$936** | **~$216** |
+| Infraestructura mensual — 5,000 llamadas/día | **~$3,060** | **~$720** |
+| **Tiempo de entrega** | **17.5 días hábiles** | **17.5 días hábiles** |
+| GPU mínima requerida | AWS G5.xlarge | RTX 4090 / A10G |
