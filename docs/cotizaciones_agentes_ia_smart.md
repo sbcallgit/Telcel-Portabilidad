@@ -6,7 +6,26 @@
 
 ---
 
+## Orden de las cotizaciones — de menor a mayor complejidad
+
+Las cotizaciones están ordenadas progresivamente: cada una añade una capa de complejidad sobre la anterior. Puedes detenerte en cualquier nivel según el volumen, el presupuesto y la capacidad operativa.
+
+| # | Cotización | Complejidad | Dependencias externas | Para quién |
+|---|---|---|---|---|
+| C#1 | ElevenLabs + Telnyx | ⭐ Baja | ElevenLabs + Telnyx | Arranque rápido, volumen bajo |
+| C#2 | ElevenLabs + SIP propio | ⭐⭐ Media | ElevenLabs + mayorista SIP | > 400 llamadas/día |
+| C#3 | NVIDIA Riva self-hosted | ⭐⭐⭐ Alta | Claude API + mayorista SIP | DevOps disponible, volumen alto |
+| C#4 | AMD ROCm self-hosted | ⭐⭐⭐⭐ Muy alta | Solo mayorista SIP | Máximo ahorro, latencia aceptable |
+| C#5 | Independencia tecnológica total | ⭐⭐⭐⭐⭐ Máxima | Solo SIP + WhatsApp | Independencia total, múltiples clientes |
+| C#6 | Plataforma multi-cliente | ⭐⭐⭐⭐⭐ Máxima+ | Depende del stack elegido | Producto SaaS propio |
+| — | Modificador LiveKit | Reduce complejidad en todas | — | Aplica a cualquier cotización |
+
+> **Recomendación de ruta:** C#1 para validar el producto → C#3 cuando el volumen lo justifique → C#5 para independencia total → C#6 para escalar a múltiples clientes.
+
+---
+
 ## Cotización #1 — Agente de Voz con ElevenLabs SDK + SIP Trunk
+### Complejidad: ⭐ Baja
 
 ### Alcance del desarrollo
 
@@ -87,6 +106,7 @@
 ---
 
 ## Cotización #2 — SIP Trunk Propio (Self-Hosted)
+### Complejidad: ⭐⭐ Media
 
 ### Variación respecto a Cotización #1
 
@@ -184,6 +204,7 @@ En lugar de pagar a Telnyx/Vonage/Twilio por minuto, se monta infraestructura SI
 ---
 
 ## Cotización #3 — Agente de Voz Self-Hosted con NVIDIA Riva + LLM
+### Complejidad: ⭐⭐⭐ Alta
 
 ### Concepto
 
@@ -390,6 +411,7 @@ Para escalar más allá de 1 GPU se requiere:
 ---
 
 ## Cotización #4 — Agente de Voz Self-Hosted con AMD ROCm
+### Complejidad: ⭐⭐⭐⭐ Muy Alta
 
 ### Concepto
 
@@ -508,6 +530,7 @@ Misma arquitectura self-hosted que C#3 pero con GPU AMD en lugar de NVIDIA. El s
 ---
 
 ## Cotización #5 — Stack de Independencia Tecnológica Total
+### Complejidad: ⭐⭐⭐⭐⭐ Máxima
 
 ### Concepto
 
@@ -691,6 +714,7 @@ Asumiendo **1,000 conversaciones de texto/día + 200 llamadas/día**:
 ---
 
 ## Modificador: LiveKit como infraestructura de medios
+### Aplica a: C#1 · C#2 · C#3 · C#4 · C#5 — reduce complejidad y tiempo de desarrollo en todas
 
 ### Qué es LiveKit
 
@@ -814,6 +838,7 @@ Si no se quiere operar el servidor de LiveKit propio:
 ---
 
 ## Cotización #6 — Plataforma Multi-Cliente de Agentes IA
+### Complejidad: ⭐⭐⭐⭐⭐ Máxima+ (arquitectura transversal)
 
 ### Concepto
 
