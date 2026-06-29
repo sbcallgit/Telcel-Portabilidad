@@ -154,6 +154,7 @@ bot_telcel_portabilidad/
 | `/admin/meta-insights` | GET | Ad Insights de Meta (gasto, clics, CPL) con filtro fecha y nivel |
 | `/admin/capi-test` | POST | Dispara evento CAPI manualmente — `simulate=true` para prueba |
 | `/admin/utm-data` | GET | Atribución UTM desde tabla `leads` — por campaña, fuente y ad_id |
+| `/admin/roi-data` | GET | CPL, CPA y % conversión por campaña — combina Meta Ads API, `kpi_conversaciones` y `leads` (UTM) |
 | `/admin/megacable-data` | GET | KPIs del agente Megacable desde BD externa |
 | `/admin/bitrix-eventos-seed` | POST | Puebla `bitrix_eventos` desde `kpi_conversaciones` existente (migración inicial) |
 | `/admin/conversation/{id}` | GET | Detalle completo de una conversación: resumen, mensajes, costos por mensaje del bot y trazabilidad del pipeline |
@@ -589,6 +590,7 @@ Tabla aislada del agente (no la usan los nodos). Una fila por conversación. Se 
 - **Transporte:** SMTP SSL puerto 465 vía `smtplib` estándar en executor (sin dependencias adicionales)
 - **Destinatarios:** configurados en `REPORT_EMAIL_TO` como lista separada por comas
 - **KPIs en el HTML:** total de conversaciones, ventas WON, tiempo de primera respuesta promedio, tasa de automatización del bot, conversaciones con asesor humano, tiempo de cierre promedio, mensajes promedio por cliente
+- **Sección de inversión y ROI** (aparece solo si `META_ACCESS_TOKEN` está configurado): 4 KPI cards (Inversión Meta MXN, Costo IA USD, CPL, % Conversión lead→venta), tabla de indicadores (CPA Meta, Costo IA por venta) y tabla por campaña (Inversión · Leads · CPL · Ventas · % Conv · CPA). Fuentes: Meta Marketing API para spend/leads WA; JOIN `kpi_conversaciones` + `leads` para ventas por campaña (fuente de verdad); `bitrix_eventos` para costo IA. Si Meta falla, el correo se envía igual sin esa sección.
 
 ### Triggers manuales
 
@@ -614,38 +616,45 @@ Ambos endpoints retornan `{"status": "started"}` inmediatamente y corren en back
 
 ---
 
-## Embed de conversación en Bitrix24 (pestaña del deal)
+## Embed de conversación en Bitrix24 (pestañas del deal)
 
-Cada deal del pipeline 90 tiene una pestaña **"Vera · Conversación"** que muestra el historial completo de la conversación del bot directamente dentro del CRM, sin salir de Bitrix24.
+Cada deal del pipeline 90 tiene **dos pestañas** embebidas:
 
-### Cómo funciona
+| Pestaña | Handler | Para quién | Contenido |
+|---|---|---|---|
+| "Vera · Conversación" | `POST /bitrix/deal-embed` | Supervisores | Historial completo + botón toggle |
+| "Control Bot" | `POST /bitrix/bot-control` | Asesores | Solo botón Pausar/Activar, sin datos sensibles |
+
+### Cómo funciona (ambas pestañas)
 
 ```
-Asesor abre un deal en Bitrix24
+Asesor/Supervisor abre un deal en Bitrix24
         ↓
-Clic en pestaña "Vera · Conversación" (CRM_DEAL_DETAIL_TAB)
+Clic en la pestaña correspondiente (CRM_DEAL_DETAIL_TAB)
         ↓
-Bitrix POST a /bitrix/deal-embed con AUTH_ID + PLACEMENT_OPTIONS{"ID": deal_id}
+Bitrix POST al handler con AUTH_ID + PLACEMENT_OPTIONS{"ID": deal_id}
         ↓
 El endpoint valida el token contra profile.json del portal
         ↓
-Busca id_conversacion: leads.bitrix_lead_id → bitrix_eventos.deal_id (fallback)
+Consulta Redis: bot_pausado:{phone} → estado actual del bot
         ↓
-HTML self-contained con KPI cards + tabla de mensajes + pipeline de stages
+Devuelve HTML self-contained con el contenido de la pestaña
 ```
 
-### Endpoint
+### Endpoints
 
-**`POST /bitrix/deal-embed`** — handler del placement. Recibe form-encoded de Bitrix:
-- `AUTH_ID` — access token del usuario que abre la pestaña (validado contra el portal)
-- `DOMAIN` — dominio del portal (ej. `b24-ahyle8.bitrix24.mx`)
-- `PLACEMENT_OPTIONS` — JSON `{"ID": "<deal_id>"}`
+**`POST /bitrix/deal-embed`** — pestaña "Vera · Conversación" (supervisores):
+- Devuelve HTML con: botón toggle bot, KPI cards, resumen AI, tabla de mensajes, pipeline de stages
 
-Devuelve HTML self-contained (sin dependencias externas) con:
-- KPI cards: mensajes bot / usuario / asesor / costo total USD + tokens
-- Resumen AI y motivo de escalamiento
-- Tabla cronológica de mensajes con badge por actor, costo y tokens (solo bot)
-- Trazabilidad del pipeline: tarjetas scrolleables con stage, fecha y duración
+**`POST /bitrix/bot-control`** — pestaña "Control Bot" (asesores):
+- Devuelve HTML minimalista: solo indicador de estado (punto verde/rojo) y botón toggle centrado
+- Sin mensajes, sin costos, sin tokens, sin resumen — no expone datos sensibles
+
+**`POST /bitrix/bot-toggle`** — compartido por ambas pestañas para pausar/reactivar:
+- Auth: header `X-Admin-Token` (embebido en el HTML de cada pestaña)
+- Body JSON: `{"deal_id": "...", "action": "pause"|"resume"}`
+- Busca teléfono desde `leads.bitrix_lead_id`; fallback en `bitrix_eventos.deal_id`
+- Escribe/borra `bot_pausado:{phone}` en Redis — el webhook de WhatsApp ignora mensajes entrantes mientras la clave exista
 
 ### Setup inicial (una sola vez)
 
@@ -657,11 +666,17 @@ Esto redirige al portal de Bitrix24 para aprobar permisos. Al ver "✅ Autorizac
 
 **Prerequisito:** la app local en el portal debe tener `placement` en su lista de scopes antes de abrir la URL.
 
-**2. Registrar el placement:**
+**2. Registrar ambas pestañas:**
 ```bash
+# Pestaña supervisores — "Vera · Conversación"
 curl -X POST https://portabilidad.callcomcc.io/admin/bitrix-placement-bind \
   -H "X-Admin-Token: <ADMIN_TOKEN>"
-# Respuesta exitosa: {"status": "ok", "bitrix_result": {"result": true, ...}}
+
+# Pestaña asesores — "Control Bot"
+curl -X POST https://portabilidad.callcomcc.io/admin/bitrix-bot-control-bind \
+  -H "X-Admin-Token: <ADMIN_TOKEN>"
+
+# Respuesta exitosa de ambos: {"status": "ok", "bitrix_result": {"result": true, ...}}
 ```
 
 ### Re-autorización
@@ -669,7 +684,7 @@ curl -X POST https://portabilidad.callcomcc.io/admin/bitrix-placement-bind \
 Si el refresh_token expira o se agregan nuevos scopes a la app:
 1. Abrir `https://telegram-portabilidad.callcomcc.io/bitrix/auth` en el navegador
 2. Aprobar en el portal de Bitrix24
-3. Si cambiaron los scopes, volver a ejecutar `bitrix-placement-bind`
+3. Si cambiaron los scopes, volver a ejecutar ambos `placement-bind`
 
 ### Notas técnicas
 
@@ -677,6 +692,8 @@ Si el refresh_token expira o se agregan nuevos scopes a la app:
 - **Lookup de conversación:** busca primero en `leads.bitrix_lead_id = deal_id`; si no encuentra, busca en `bitrix_eventos.deal_id`; último fallback `deal_id = id_conversacion` (deals creados por Open Lines).
 - **Validación del token:** llama `GET https://{DOMAIN}/rest/profile.json?auth={AUTH_ID}`. Si la validación falla por red, continúa mostrando los datos (mejor experiencia que bloquear).
 - **HTML self-contained:** estilos inline, sin CDN ni assets externos — funciona dentro del iframe de Bitrix aunque el portal no tenga acceso a recursos externos.
+- **Botón toggle bot:** el estado inicial (activo/pausado) se lee de Redis en el render. El JS del botón llama `POST /bitrix/bot-toggle` con `X-Admin-Token` embebido — aceptable porque el iframe solo es accesible a usuarios autenticados en Bitrix sobre HTTPS.
+- **`bot_pausado:{phone}` en Redis:** sin TTL — persiste hasta que el asesor reactive el bot manualmente o el deal pase a `C90:LOSE` (limpieza automática por `job_bitrix_sync`). Para limpiar todas las claves activas: `redis-cli --scan --pattern "bot_pausado:*" | xargs redis-cli DEL`.
 - **Scope `placement` en webhooks:** NO disponible para webhooks entrantes de Bitrix24 — solo para apps OAuth. No intentar via webhook.
 
 ---
@@ -841,9 +858,10 @@ Panel web en `dashboard/` — accesible en `https://portabilidad.callcomcc.io/da
 
 1. **Telcel Portabilidad** — KPI cards, distribución por stage (doughnut), mensajes por actor (bar), tabla de conversaciones paginada con filtros (fecha, stage, búsqueda). Cada fila de la tabla es clickeable y navega al detalle de la conversación (`/conversation/:id`).
 2. **Detalle de conversación** (`/conversation/:id`) — KPI cards (mensajes bot/usuario/asesor, costo total USD + tokens), resumen AI, tabla cronológica de mensajes con costo y tokens por mensaje del bot, y trazabilidad del pipeline con tarjetas horizontales scrolleables por transición de stage.
-3. **Meta Ads — Portabilidad 2 Callcom** — gasto, impresiones, clics, CTR, conversaciones WhatsApp, CPL; gráfica gasto vs conversaciones; tabla detallada. Filtro por fecha y nivel (campaña/conjunto/anuncio)
-4. **Atribución UTM** — leads con UTM capturado, ventas atribuidas; gráfica por fuente; tabla por campaña con tasa de conversión; tabla por Ad ID
-5. **Megacable** — KPI cards del agente Megacable (BD externa), gráficas de estado y mensajes por actor, tabla de conversaciones recientes. Filtro por fecha independiente
+3. **ROI de Campaña** — 5 KPI cards (Inversión Meta MXN, CPL, % Conversión lead→venta, CPA Meta, Costo IA LLM), gráfica horizontal de barras (CPL + CPA por campaña) con línea de % conversión, tabla por campaña con badge de conversión. Endpoint: `GET /admin/roi-data`. Fuentes: Meta API (spend/leads WA), JOIN `kpi_conversaciones` + `leads` (ventas por campaña como fuente de verdad), `bitrix_eventos` (costo IA). Filtro de fechas independiente; si Meta API no está disponible las cards de inversión muestran `—`.
+4. **Meta Ads — Portabilidad 2 Callcom** — gasto, impresiones, clics, CTR, conversaciones WhatsApp, CPL; gráfica gasto vs conversaciones; tabla detallada. Filtro por fecha y nivel (campaña/conjunto/anuncio)
+5. **Atribución UTM** — leads con UTM capturado, ventas atribuidas; gráfica por fuente; tabla por campaña con tasa de conversión; tabla por Ad ID
+6. **Megacable** — KPI cards del agente Megacable (BD externa), gráficas de estado y mensajes por actor, tabla de conversaciones recientes. Filtro por fecha independiente
 
 ### Notas del dashboard
 
