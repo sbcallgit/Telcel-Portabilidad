@@ -3,7 +3,7 @@ import { CommonModule, DatePipe } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Chart, registerables } from 'chart.js';
-import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow, FunnelData, FunnelTransicion, CostoResultado, CostoResumen, CostoDetalle } from '../../services/kpi.service';
+import { KpiService, KpiData, KpiResumen, StageCount, Conversacion, MegacableData, MegacableResumen, MegacableConversacion, UtmData, MetaInsightsData, MetaInsightRow, FunnelData, FunnelTransicion, CostoResultado, CostoResumen, CostoDetalle, RoiData, RoiCampana } from '../../services/kpi.service';
 import { AuthService } from '../../services/auth.service';
 
 Chart.register(...registerables);
@@ -105,6 +105,15 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
   @ViewChild('utmFuenteChart') utmFuenteChartRef!: ElementRef<HTMLCanvasElement>;
   private utmFuenteChart?: Chart;
 
+  roiData: RoiData | null = null;
+  roiLoading = true;
+  roiError = '';
+  roiDesde = '';
+  roiHasta = '';
+
+  @ViewChild('roiChart') roiChartRef!: ElementRef<HTMLCanvasElement>;
+  private roiChart?: Chart;
+
   megacableData: MegacableData | null = null;
   megacableLoading = true;
   megacableError = '';
@@ -118,6 +127,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.load();
     this.loadFunnel();
     this.loadCostoResultado();
+    this.loadRoi();
     this.loadMeta();
     this.loadUtm();
     this.loadMegacable();
@@ -128,6 +138,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     if (this.resumen) this.renderCharts();
     if (this.funnelData) this.renderFunnelChart();
     if (this.costoResumen.length) this.renderCostoChart();
+    if (this.roiData) this.renderRoiChart();
     if (this.metaData) this.renderMetaChart();
     if (this.utmData) this.renderUtmChart();
     if (this.megacableData) this.renderMegacableCharts();
@@ -138,6 +149,7 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.msgChart?.destroy();
     this.funnelChart?.destroy();
     this.costoChart?.destroy();
+    this.roiChart?.destroy();
     this.metaSpendChart?.destroy();
     this.utmFuenteChart?.destroy();
     this.mgEstadoChart?.destroy();
@@ -409,6 +421,116 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     this.mgDesde = '';
     this.mgHasta = '';
     this.loadMegacable();
+  }
+
+  loadRoi(): void {
+    this.roiLoading = true;
+    this.roiError = '';
+    this.kpiSvc.getRoiData(this.roiDesde || undefined, this.roiHasta || undefined).subscribe({
+      next: (data) => {
+        this.roiData = data;
+        this.roiLoading = false;
+        if (this.chartsReady) setTimeout(() => this.renderRoiChart(), 0);
+      },
+      error: () => {
+        this.roiError = 'Error al cargar datos de ROI.';
+        this.roiLoading = false;
+      },
+    });
+  }
+
+  applyRoiFilter(): void { this.loadRoi(); }
+
+  clearRoiFilter(): void {
+    this.roiDesde = '';
+    this.roiHasta = '';
+    this.loadRoi();
+  }
+
+  private renderRoiChart(): void {
+    if (!this.roiData || !this.roiChartRef) return;
+    this.roiChart?.destroy();
+    const campanas = this.roiData.campanas.filter(c => c.spend > 0).slice(0, 8);
+    if (!campanas.length) return;
+
+    this.roiChart = new Chart(this.roiChartRef.nativeElement, {
+      data: {
+        labels: campanas.map(c => c.name),
+        datasets: [
+          {
+            type: 'bar' as const,
+            label: 'CPL (MXN)',
+            data: campanas.map(c => c.cpl ?? 0),
+            backgroundColor: '#3b82f6',
+            borderRadius: 4,
+            borderSkipped: false,
+            yAxisID: 'yCpl',
+            order: 2,
+          },
+          {
+            type: 'bar' as const,
+            label: 'CPA (MXN)',
+            data: campanas.map(c => c.cpa ?? 0),
+            backgroundColor: '#e8001d',
+            borderRadius: 4,
+            borderSkipped: false,
+            yAxisID: 'yCpl',
+            order: 2,
+          },
+          {
+            type: 'line' as const,
+            label: '% Conversión',
+            data: campanas.map(c => c.pct_conv),
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16,185,129,0.1)',
+            pointBackgroundColor: '#10b981',
+            pointRadius: 4,
+            tension: 0.3,
+            yAxisID: 'yConv',
+            order: 1,
+          },
+        ],
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'top', labels: { font: { family: 'Inter', size: 12 } } },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                if (ctx.dataset.label === '% Conversión') return ` Conv: ${ctx.parsed.x}%`;
+                return ` ${ctx.dataset.label}: $${(ctx.parsed.x ?? 0).toFixed(2)} MXN`;
+              },
+            },
+          },
+        },
+        scales: {
+          yCpl: {
+            axis: 'x',
+            type: 'linear',
+            position: 'bottom',
+            beginAtZero: true,
+            grid: { color: '#f1f5f9' },
+            title: { display: true, text: 'MXN', font: { family: 'Inter', size: 11 } },
+            ticks: { font: { family: 'Inter' }, callback: (v) => `$${v}` },
+          },
+          yConv: {
+            axis: 'x',
+            type: 'linear',
+            position: 'top',
+            beginAtZero: true,
+            max: 100,
+            grid: { display: false },
+            title: { display: true, text: '% Conv.', font: { family: 'Inter', size: 11 } },
+            ticks: { font: { family: 'Inter' }, callback: (v) => `${v}%` },
+          },
+          y: { grid: { display: false }, ticks: { font: { family: 'Inter', size: 11 } } },
+        },
+      },
+    });
   }
 
   loadMeta(): void {

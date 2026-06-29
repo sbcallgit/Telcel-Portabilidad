@@ -324,6 +324,133 @@
     }
 
     <!-- ═══════════════════════════════════════════════════════════
+         SECCIÓN ROI DE CAMPAÑA
+    ════════════════════════════════════════════════════════════════ -->
+    <div class="section-divider">
+      <span>ROI de Campaña</span>
+    </div>
+
+    <div class="filters">
+      <div class="filter-group">
+        <label>Desde</label>
+        <input type="date" [(ngModel)]="roiDesde" />
+      </div>
+      <div class="filter-group">
+        <label>Hasta</label>
+        <input type="date" [(ngModel)]="roiHasta" />
+      </div>
+      <button class="btn-primary" (click)="applyRoiFilter()">Filtrar</button>
+      <button class="btn-ghost" (click)="clearRoiFilter()">Limpiar</button>
+    </div>
+
+    @if (roiLoading) {
+      <div class="loading-state">Cargando ROI…</div>
+    } @else if (roiError) {
+      <div class="error-state">{{ roiError }}</div>
+    } @else if (roiData) {
+
+      <!-- KPI cards globales -->
+      <div class="cards">
+        <div class="card card--warning">
+          <p class="card-label">Inversión Meta Ads</p>
+          <p class="card-value">${{ roiData.global.total_spend_mxn | number:'1.2-2' }}</p>
+          <p class="card-sub">MXN · {{ roiDesde || 'últimos 30 días' }}</p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">CPL (costo por lead)</p>
+          <p class="card-value">
+            @if (roiData.global.cpl) { ${{ roiData.global.cpl | number:'1.2-2' }} MXN }
+            @else { — }
+          </p>
+          <p class="card-sub">{{ roiData.global.total_leads_wa | number }} leads WhatsApp</p>
+        </div>
+        <div class="card card--success">
+          <p class="card-label">% Conversión lead → venta</p>
+          <p class="card-value">{{ roiData.global.pct_conversion }}%</p>
+          <p class="card-sub">{{ roiData.global.total_ventas }} ventas</p>
+        </div>
+        <div class="card">
+          <p class="card-label">CPA Meta (inv. / ventas)</p>
+          <p class="card-value">
+            @if (roiData.global.cpa_meta) { ${{ roiData.global.cpa_meta | number:'1.2-2' }} MXN }
+            @else { — }
+          </p>
+          <p class="card-sub">
+            @if (roiData.global.ai_costo_por_venta) {
+              + ${{ roiData.global.ai_costo_por_venta | number:'1.4-4' }} USD IA/venta
+            }
+          </p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">Costo IA (LLM) del periodo</p>
+          <p class="card-value">${{ roiData.global.ai_cost_usd | number:'1.4-4' }} USD</p>
+          <p class="card-sub">
+            @if (!roiData.global.meta_disponible) { Meta no disponible }
+          </p>
+        </div>
+      </div>
+
+      <!-- Gráfica CPL / CPA / % Conversión por campaña -->
+      @if (roiData.campanas.length > 0) {
+        <div class="chart-card" style="margin-top:1.5rem">
+          <h3>CPL, CPA y % Conversión por campaña</h3>
+          <div class="chart-wrap" [style.height.px]="roiData.campanas.length * 52 + 80">
+            <canvas #roiChart></canvas>
+          </div>
+        </div>
+
+        <!-- Tabla por campaña -->
+        <div class="table-card" style="margin-top:1.5rem">
+          <div class="table-header">
+            <h3 class="table-title">Desglose por campaña</h3>
+            <span class="table-count">{{ roiData.campanas.length }} campañas</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Campaña</th>
+                  <th style="text-align:right">Inversión (MXN)</th>
+                  <th style="text-align:right">Leads</th>
+                  <th style="text-align:right">CPL</th>
+                  <th style="text-align:right">Ventas</th>
+                  <th style="text-align:right">% Conv.</th>
+                  <th style="text-align:right">CPA</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (c of roiData.campanas; track c.name) {
+                  <tr>
+                    <td>{{ c.name }}</td>
+                    <td style="text-align:right">${{ c.spend | number:'1.2-2' }}</td>
+                    <td style="text-align:right">{{ c.leads | number }}</td>
+                    <td style="text-align:right">
+                      @if (c.cpl) { ${{ c.cpl | number:'1.2-2' }} } @else { — }
+                    </td>
+                    <td style="text-align:right">{{ c.ventas }}</td>
+                    <td style="text-align:right">
+                      <span class="badge" [ngClass]="{'badge-green': c.pct_conv >= 5, 'badge-blue': c.pct_conv > 0 && c.pct_conv < 5}">
+                        {{ c.pct_conv }}%
+                      </span>
+                    </td>
+                    <td style="text-align:right">
+                      @if (c.cpa) { ${{ c.cpa | number:'1.2-2' }} } @else { — }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      } @else {
+        <div class="table-card" style="margin-top:1.5rem">
+          <p class="empty">Sin datos de campaña — los leads de Meta Ads con UTM capturado aparecerán aquí.</p>
+        </div>
+      }
+
+    }
+
+    <!-- ═══════════════════════════════════════════════════════════
          SECCIÓN META ADS — AD INSIGHTS
     ════════════════════════════════════════════════════════════════ -->
     <div class="section-divider">

@@ -1117,6 +1117,134 @@ async def get_conversation_detail(
 
 
 # ---------------------------------------------------------------------------
+# ROI de campaña — CPL, CPA, % conversión
+# ---------------------------------------------------------------------------
+
+@router.get("/roi-data")
+async def get_roi_data(
+    _: AuthDep,
+    desde: Optional[date] = Query(None),
+    hasta: Optional[date] = Query(None),
+) -> JSONResponse:
+    """CPL, CPA y % conversión combinando Meta Ads, UTM y costo IA por campaña."""
+    from datetime import datetime, timezone, timedelta
+    from integrations.postgres import client as db
+    from config.settings import settings
+
+    if desde and hasta:
+        desde_ts = datetime(desde.year, desde.month, desde.day, tzinfo=timezone.utc)
+        hasta_ts = datetime(hasta.year, hasta.month, hasta.day, 23, 59, 59, tzinfo=timezone.utc)
+    else:
+        hasta_ts = datetime.now(tz=timezone.utc)
+        desde_ts = hasta_ts - timedelta(days=30)
+
+    # 1. Costo IA del periodo
+    ai_row = await db.fetchrow(
+        """
+        SELECT COALESCE(SUM(costo_usd), 0) AS total
+        FROM bitrix_eventos
+        WHERE tipo_actor = 'bot' AND costo_usd IS NOT NULL
+          AND fecha_evento >= $1 AND fecha_evento <= $2
+        """,
+        desde_ts, hasta_ts,
+    )
+    ai_cost = float(ai_row["total"]) if ai_row else 0.0
+
+    # 2. Ventas totales desde kpi_conversaciones (fuente de verdad)
+    kpi_row = await db.fetchrow(
+        """
+        SELECT COUNT(*) FILTER (WHERE estado_actual = 'C90:WON') AS ventas
+        FROM kpi_conversaciones
+        WHERE creado_el >= $1 AND creado_el <= $2
+        """,
+        desde_ts, hasta_ts,
+    )
+    total_ventas = int(kpi_row["ventas"]) if kpi_row else 0
+
+    # 3. Conversión por campaña — JOIN kpi_conversaciones (estado_actual) + leads (UTM)
+    utm_rows = await db.fetch(
+        """
+        SELECT
+            COALESCE(NULLIF(l.utm_campaign,''), '(sin campaña)') AS campana,
+            COUNT(*)                                              AS leads,
+            COUNT(*) FILTER (WHERE k.estado_actual = 'C90:WON') AS ventas
+        FROM kpi_conversaciones k
+        JOIN leads l ON l.telefono = k.id_conversacion
+        WHERE k.creado_el >= $1 AND k.creado_el <= $2
+          AND l.utm_source != ''
+        GROUP BY campana
+        ORDER BY leads DESC
+        LIMIT 15
+        """,
+        desde_ts, hasta_ts,
+    )
+    utm_by_name = {r["campana"]: dict(r) for r in utm_rows}
+
+    # 4. Meta Ads por campaña (opcional — si no hay config, se omite gracefully)
+    meta_rows: list[dict] = []
+    total_spend = 0.0
+    total_leads_wa = 0
+    meta_disponible = False
+    if settings.meta_access_token and settings.meta_ad_account_id:
+        try:
+            from integrations.meta.insights import get_insights
+            meta_rows = await get_insights(
+                date_preset=None,
+                since=str(desde_ts.date()),
+                until=str(hasta_ts.date()),
+                level="campaign",
+            )
+            total_spend    = round(sum(r["spend"] for r in meta_rows), 2)
+            total_leads_wa = sum(r["wa_conversaciones"] for r in meta_rows)
+            meta_disponible = True
+        except Exception as exc:
+            logger.warning("roi_meta_error", extra={"error": str(exc)})
+
+    meta_by_name = {r["campaign_name"]: r for r in meta_rows}
+
+    # 5. Merge por nombre de campaña
+    all_names = set(meta_by_name) | set(utm_by_name)
+    campanas: list[dict] = []
+    for name in all_names:
+        m = meta_by_name.get(name, {})
+        u = utm_by_name.get(name, {})
+        spend  = float(m.get("spend", 0) or 0)
+        leads  = int(m.get("wa_conversaciones", 0) or u.get("leads", 0) or 0)
+        ventas = int(u.get("ventas", 0) or 0)
+        campanas.append({
+            "name":     name,
+            "spend":    round(spend, 2),
+            "leads":    leads,
+            "ventas":   ventas,
+            "cpl":      round(spend / leads, 2)  if leads  else None,
+            "cpa":      round(spend / ventas, 2) if ventas else None,
+            "pct_conv": round(ventas / leads * 100, 1) if leads else 0.0,
+        })
+    campanas.sort(key=lambda x: x["spend"], reverse=True)
+
+    # 6. KPIs globales
+    cpl_global    = round(total_spend / total_leads_wa, 2) if total_leads_wa else None
+    cpa_meta      = round(total_spend / total_ventas, 2)   if total_ventas   else None
+    ai_por_venta  = round(ai_cost / total_ventas, 6)       if total_ventas   else None
+    pct_conv      = round(total_ventas / total_leads_wa * 100, 1) if total_leads_wa else 0.0
+
+    return JSONResponse({
+        "global": {
+            "total_spend_mxn":    total_spend,
+            "total_leads_wa":     total_leads_wa,
+            "total_ventas":       total_ventas,
+            "ai_cost_usd":        round(ai_cost, 6),
+            "cpl":                cpl_global,
+            "cpa_meta":           cpa_meta,
+            "ai_costo_por_venta": ai_por_venta,
+            "pct_conversion":     pct_conv,
+            "meta_disponible":    meta_disponible,
+        },
+        "campanas": campanas,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Bitrix placement bind (one-time setup)
 # ---------------------------------------------------------------------------
 
@@ -1159,4 +1287,46 @@ async def bitrix_placement_bind(_: AuthDep) -> JSONResponse:
 
     result = r.json()
     logger.info("bitrix_placement_bind", extra={"result": result, "handler": handler_url})
+    return JSONResponse({"status": "ok", "handler": handler_url, "bitrix_result": result})
+
+
+@router.post("/bitrix-bot-control-bind")
+async def bitrix_bot_control_bind(_: AuthDep) -> JSONResponse:
+    """Registra la pestaña 'Control Bot' en Bitrix24 (solo botón, para asesores).
+
+    Ejecutar una sola vez. Requiere que el flujo OAuth (/bitrix/auth) ya esté completo.
+    Registra CRM_DEAL_DETAIL_TAB → /bitrix/bot-control.
+    """
+    import httpx
+    from config.settings import settings
+    from integrations.bitrix.oauth import get_token
+
+    try:
+        token = await get_token()
+    except Exception as exc:
+        return JSONResponse(
+            {"status": "error", "message": f"No hay OAuth token. Ejecuta primero /bitrix/auth. ({exc})"},
+            status_code=400,
+        )
+
+    domain = settings.bitrix_webhook_url.split("/rest/")[0].replace("https://", "")
+    handler_url = f"{settings.bitrix_public_url}/bitrix/bot-control"
+
+    async with httpx.AsyncClient(timeout=10) as hx:
+        r = await hx.post(
+            f"https://{domain}/rest/placement.bind",
+            params={"auth": token},
+            json={
+                "PLACEMENT": "CRM_DEAL_DETAIL_TAB",
+                "HANDLER":   handler_url,
+                "LANG_ALL":  {
+                    "ru": {"TITLE": "Control Bot"},
+                    "en": {"TITLE": "Control Bot"},
+                    "es": {"TITLE": "Control Bot"},
+                },
+            },
+        )
+
+    result = r.json()
+    logger.info("bitrix_bot_control_bind", extra={"result": result, "handler": handler_url})
     return JSONResponse({"status": "ok", "handler": handler_url, "bitrix_result": result})

@@ -206,6 +206,33 @@ export interface MegacableData {
   conversaciones: MegacableConversacion[];
 }
 
+export interface RoiCampana {
+  name: string;
+  spend: number;
+  leads: number;
+  ventas: number;
+  cpl: number | null;
+  cpa: number | null;
+  pct_conv: number;
+}
+
+export interface RoiGlobal {
+  total_spend_mxn: number;
+  total_leads_wa: number;
+  total_ventas: number;
+  ai_cost_usd: number;
+  cpl: number | null;
+  cpa_meta: number | null;
+  ai_costo_por_venta: number | null;
+  pct_conversion: number;
+  meta_disponible: boolean;
+}
+
+export interface RoiData {
+  global: RoiGlobal;
+  campanas: RoiCampana[];
+}
+
 export interface ConversationEvento {
   fecha_evento: string | null;
   tipo_actor: 'usuario' | 'bot' | 'humano' | 'sistema';
@@ -297,6 +324,13 @@ export class KpiService {
     if (desde) params = params.set('desde', desde);
     if (hasta) params = params.set('hasta', hasta);
     return this.http.get<FunnelData>('/api/admin/funnel-data', { headers: this.headers, params });
+  }
+
+  getRoiData(desde?: string, hasta?: string): Observable<RoiData> {
+    let params = new HttpParams();
+    if (desde) params = params.set('desde', desde);
+    if (hasta) params = params.set('hasta', hasta);
+    return this.http.get<RoiData>('/api/admin/roi-data', { headers: this.headers, params });
   }
 
   getConversationDetail(id: string): Observable<ConversationDetail> {

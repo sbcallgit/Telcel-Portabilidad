@@ -61,6 +61,91 @@ async def _get_daily_stats() -> dict:
     return dict(rows[0]) if rows else {}
 
 
+async def _get_meta_data(inicio: datetime, fin: datetime) -> dict:
+    """Datos de Meta Ads para el periodo al nivel campaña. Retorna {} si no hay config o error."""
+    from config.settings import settings
+    if not settings.meta_access_token or not settings.meta_ad_account_id:
+        return {}
+    try:
+        from integrations.meta.insights import get_insights
+        rows = await get_insights(
+            date_preset=None,
+            since=str(inicio.date()),
+            until=str(fin.date()),
+            level="campaign",
+        )
+        return {
+            "total_spend":      round(sum(r["spend"] for r in rows), 2),
+            "total_leads_meta": sum(r["wa_conversaciones"] for r in rows),
+            "rows":             sorted(rows, key=lambda r: r["spend"], reverse=True),
+        }
+    except Exception as exc:
+        logger.warning("kpi_email_meta_error", extra={"error": str(exc)})
+        return {}
+
+
+async def _get_ai_cost(inicio: datetime, fin: datetime) -> float:
+    """Costo total LLM del periodo desde bitrix_eventos (USD)."""
+    row = await db.fetchrow(
+        """
+        SELECT COALESCE(SUM(costo_usd), 0) AS total
+        FROM bitrix_eventos
+        WHERE tipo_actor = 'bot'
+          AND costo_usd IS NOT NULL
+          AND fecha_evento >= $1 AND fecha_evento <= $2
+        """,
+        inicio, fin,
+    )
+    return float(row["total"]) if row else 0.0
+
+
+async def _get_utm_conversion(inicio: datetime, fin: datetime) -> list[dict]:
+    """Ventas por campaña UTM — JOIN kpi_conversaciones (estado_actual) + leads (UTM)."""
+    rows = await db.fetch(
+        """
+        SELECT
+            COALESCE(NULLIF(l.utm_campaign,''), '(sin campaña)') AS campana,
+            COUNT(*)                                              AS leads,
+            COUNT(*) FILTER (WHERE k.estado_actual = 'C90:WON') AS ventas
+        FROM kpi_conversaciones k
+        JOIN leads l ON l.telefono = k.id_conversacion
+        WHERE k.creado_el >= $1 AND k.creado_el <= $2
+          AND l.utm_source != ''
+        GROUP BY campana
+        ORDER BY leads DESC
+        LIMIT 15
+        """,
+        inicio, fin,
+    )
+    return [dict(r) for r in rows]
+
+
+def _merge_campaign_data(meta: dict, utm_conv: list[dict]) -> list[dict]:
+    """Fusiona datos de Meta (spend, leads WA) con conversión UTM (ventas) por nombre de campaña."""
+    meta_by_name = {r["campaign_name"]: r for r in meta.get("rows", [])}
+    utm_by_name  = {r["campana"]: r for r in utm_conv}
+    all_names    = set(meta_by_name) | set(utm_by_name)
+
+    merged = []
+    for name in all_names:
+        m = meta_by_name.get(name, {})
+        u = utm_by_name.get(name, {})
+        spend  = m.get("spend", 0) or 0
+        leads  = m.get("wa_conversaciones", 0) or u.get("leads", 0) or 0
+        ventas = u.get("ventas", 0) or 0
+        merged.append({
+            "name":     name,
+            "spend":    spend,
+            "leads":    leads,
+            "ventas":   ventas,
+            "cpl":      round(spend / leads, 2)  if leads  else None,
+            "cpa":      round(spend / ventas, 2) if ventas else None,
+            "pct_conv": round(ventas / leads * 100, 1) if leads else 0.0,
+        })
+
+    return sorted(merged, key=lambda x: x["spend"], reverse=True)
+
+
 async def _build_csv() -> bytes:
     """CSV del mes actual (del día 1 hasta hoy) de kpi_conversaciones como bytes."""
     inicio_mes, ahora = _mes_actual_range()
@@ -84,7 +169,7 @@ async def _build_csv() -> bytes:
     return buf.getvalue().encode("utf-8-sig")
 
 
-def _build_html(stats: dict, rango: str) -> str:
+def _build_html(stats: dict, rango: str, meta: dict | None = None, ai_cost_usd: float = 0.0, campanas: list[dict] | None = None) -> str:
     total = stats.get("total") or 0
     con_asesor = stats.get("con_asesor") or 0
     ganadas = stats.get("ganadas") or 0
@@ -109,6 +194,77 @@ def _build_html(stats: dict, rango: str) -> str:
         return f"{float(v):.1f}" if v is not None else "—"
 
     escalamiento_pct = round(con_asesor / total * 100, 1) if total else 0
+
+    # ── Bloque de inversión (opcional) ──────────────────────────────────────
+    inversion_html = ""
+    if meta:
+        total_spend    = meta.get("total_spend", 0) or 0
+        total_leads_wa = meta.get("total_leads_meta", 0) or 0
+        cpl_global     = round(total_spend / total_leads_wa, 2) if total_leads_wa else None
+        cpa_meta       = round(total_spend / ganadas, 2) if ganadas else None
+        ai_por_venta   = round(ai_cost_usd / ganadas, 4) if ganadas else None
+        conv_pct       = round(ganadas / total_leads_wa * 100, 1) if total_leads_wa else 0.0
+
+        def _mxn(v) -> str:
+            return f"${v:,.2f} MXN" if v is not None else "—"
+
+        def _usd(v) -> str:
+            return f"${v:.4f} USD" if v is not None else "—"
+
+        def _pct2(v) -> str:
+            return f"{v:.1f}%" if v is not None else "—"
+
+        # Tabla de campañas
+        filas_campana = ""
+        for c in (campanas or []):
+            cpl_s   = _mxn(c["cpl"])
+            cpa_s   = _mxn(c["cpa"])
+            conv_s  = _pct2(c["pct_conv"])
+            filas_campana += (
+                f"<tr>"
+                f"<td>{c['name']}</td>"
+                f"<td style='text-align:right'>${c['spend']:,.2f}</td>"
+                f"<td style='text-align:right'>{c['leads']}</td>"
+                f"<td style='text-align:right'>{cpl_s}</td>"
+                f"<td style='text-align:right'>{c['ventas']}</td>"
+                f"<td style='text-align:right'>{conv_s}</td>"
+                f"<td style='text-align:right'>{cpa_s}</td>"
+                f"</tr>"
+            )
+
+        inversion_html = f"""
+  <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
+  <h2 style="font-size:16px;margin:0 0 16px;color:#333">Inversión de campaña & ROI</h2>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:24px">
+    <div style="background:#f8f8f8;border-radius:6px;padding:14px 16px">
+      <div style="font-size:22px;font-weight:bold;color:#C8102E">{_mxn(total_spend)}</div>
+      <div style="font-size:12px;color:#666;margin-top:2px">Inversión Meta Ads</div>
+    </div>
+    <div style="background:#f8f8f8;border-radius:6px;padding:14px 16px">
+      <div style="font-size:22px;font-weight:bold;color:#C8102E">{_usd(ai_cost_usd)}</div>
+      <div style="font-size:12px;color:#666;margin-top:2px">Costo IA (LLM)</div>
+    </div>
+    <div style="background:#f8f8f8;border-radius:6px;padding:14px 16px">
+      <div style="font-size:22px;font-weight:bold;color:#C8102E">{_mxn(cpl_global)}</div>
+      <div style="font-size:12px;color:#666;margin-top:2px">CPL (costo por lead)</div>
+    </div>
+    <div style="background:#f8f8f8;border-radius:6px;padding:14px 16px">
+      <div style="font-size:22px;font-weight:bold;color:#C8102E">{_pct2(conv_pct)}</div>
+      <div style="font-size:12px;color:#666;margin-top:2px">% Conversión lead → venta</div>
+    </div>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:20px">
+    <tr><th style="background:#f0f0f0;padding:8px 10px;text-align:left">Indicador</th><th style="background:#f0f0f0;padding:8px 10px;text-align:right">Valor</th></tr>
+    <tr><td style="padding:8px 10px;border-bottom:1px solid #eee">CPA Meta (inversión / ventas)</td><td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right">{_mxn(cpa_meta)}</td></tr>
+    <tr><td style="padding:8px 10px;border-bottom:1px solid #eee">Costo IA por venta</td><td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right">{_usd(ai_por_venta)}</td></tr>
+    <tr><td style="padding:8px 10px;border-bottom:1px solid #eee">Leads WhatsApp (Meta)</td><td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right">{total_leads_wa}</td></tr>
+    <tr><td style="padding:8px 10px">Ventas cerradas</td><td style="padding:8px 10px;text-align:right">{ganadas}</td></tr>
+  </table>
+
+  {'<h3 style="font-size:14px;margin:0 0 10px;color:#333">Por campaña</h3><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th style="background:#f0f0f0;padding:7px 8px;text-align:left">Campaña</th><th style="background:#f0f0f0;padding:7px 8px;text-align:right">Inversión</th><th style="background:#f0f0f0;padding:7px 8px;text-align:right">Leads</th><th style="background:#f0f0f0;padding:7px 8px;text-align:right">CPL</th><th style="background:#f0f0f0;padding:7px 8px;text-align:right">Ventas</th><th style="background:#f0f0f0;padding:7px 8px;text-align:right">% Conv.</th><th style="background:#f0f0f0;padding:7px 8px;text-align:right">CPA</th></tr></thead><tbody>' + filas_campana + '</tbody></table></div>' if filas_campana else ''}
+"""
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -156,6 +312,7 @@ def _build_html(stats: dict, rango: str) -> str:
     <p style="margin-top:20px; font-size:12px; color:#888;">
       El archivo CSV adjunto contiene el detalle completo de todas las conversaciones registradas.
     </p>
+    {inversion_html}
   </div>
   <div class="footer">Generado automáticamente a las 00:00 (America/Monterrey). No responder este correo.</div>
 </div>
@@ -200,22 +357,36 @@ async def send_kpi_report() -> None:
         from datetime import timedelta
         ahora = datetime.now(tz=TZ)
         ayer = ahora - timedelta(days=1)
-        fecha = ayer.strftime("%d/%m/%Y")           # cierre del día anterior
+        fecha = ayer.strftime("%d/%m/%Y")
         fecha_archivo = ayer.strftime("%Y%m%d")
         inicio_mes_str = ayer.replace(day=1).strftime("%d/%m/%Y")
         subject = f"Reporte KPI Vera Portabilidad — Cierre {inicio_mes_str} al {fecha}"
 
-        stats, csv_bytes = await asyncio.gather(
+        inicio_mes, fin_ayer = _mes_actual_range()
+
+        stats, csv_bytes, meta, ai_cost, utm_conv = await asyncio.gather(
             _get_daily_stats(),
             _build_csv(),
+            _get_meta_data(inicio_mes, fin_ayer),
+            _get_ai_cost(inicio_mes, fin_ayer),
+            _get_utm_conversion(inicio_mes, fin_ayer),
         )
 
+        campanas = _merge_campaign_data(meta, utm_conv) if meta else []
         rango = f"{inicio_mes_str} al {fecha}"
-        html = _build_html(stats, rango)
+        html = _build_html(stats, rango, meta=meta or None, ai_cost_usd=ai_cost, campanas=campanas)
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _send_smtp, subject, html, csv_bytes, fecha_archivo)
 
-        logger.info("kpi_email_sent", extra={"to": settings.report_email_to, "fecha": fecha})
+        logger.info(
+            "kpi_email_sent",
+            extra={
+                "to": settings.report_email_to,
+                "fecha": fecha,
+                "meta_spend": meta.get("total_spend") if meta else None,
+                "ai_cost_usd": round(ai_cost, 4),
+            },
+        )
     except Exception as exc:
         logger.error("kpi_email_error", extra={"error": str(exc)})
