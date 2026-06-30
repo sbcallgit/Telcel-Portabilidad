@@ -750,6 +750,183 @@ export class DashboardComponent implements OnInit, AfterViewInit, OnDestroy {
     });
   }
 
+  // ── Chart info modal ─────────────────────────────────────────────────────
+
+  activeInfo: string | null = null;
+
+  readonly CHART_INFO: Record<string, {
+    titulo: string;
+    fuente: string;
+    que_mide: string;
+    como_leer: string[];
+    alertas: string[];
+  }> = {
+    'kpi-cards': {
+      titulo: 'KPI Cards — Resumen general',
+      fuente: 'kpi_conversaciones + bitrix_eventos',
+      que_mide: 'Métricas globales del periodo seleccionado: volumen, conversión, velocidad de respuesta y carga del equipo humano.',
+      como_leer: [
+        'Total conversaciones: leads que iniciaron contacto con el bot. Es el volumen bruto de la campaña.',
+        'Conversiones (Venta): deals en stage C90:WON. La tasa = Ventas / Total. Meta recomendada: >10%.',
+        'Tiempo 1ª respuesta: segundos entre el primer mensaje del cliente y la primera respuesta del bot. Debe ser <30s.',
+        'Escalados a asesor: deals que llegaron a Escalamiento Humano o Prospecto. Representa la carga real del equipo.',
+      ],
+      alertas: [
+        'Tiempo 1ª respuesta > 30s: posible problema de carga del servidor o debounce mal configurado.',
+        'Tasa de conversión < 5%: revisar calidad de leads en Meta Ads o el guion del bot.',
+        'Escalados > 60% del total: el bot está escalando demasiado; revisar nodo de objeciones.',
+      ],
+    },
+    'funnel': {
+      titulo: 'Funnel de conversión',
+      fuente: 'bitrix_deal_timeline — una fila por deal, una columna por stage',
+      que_mide: 'Cuántos deals pasaron por cada etapa del pipeline. Permite ver dónde se pierde el mayor volumen de leads.',
+      como_leer: [
+        'Barras verticales (azul/rojo/verde): número de deals que llegaron a cada stage. IA Porta es siempre el 100% de referencia.',
+        'Línea amarilla: % de conversión acumulada respecto al primer stage (IA Porta).',
+        'Tooltip al pasar el mouse: muestra cantidad de deals, % respecto a IA Porta y tiempo promedio en esa etapa.',
+        'Barra verde = Venta (resultado exitoso). Barra gris = Caído (resultado perdido).',
+      ],
+      alertas: [
+        'Rescate 1 > 50% de IA Porta: más de la mitad de los leads se enfrían. Revisar nodo de sondeo u oferta.',
+        'Prospecto < 15%: el bot no está completando KPIs. Revisar nodo de cierre.',
+        'Venta < 10% de Prospecto: los asesores no están convirtiendo. Revisar tiempo de contacto post-escalamiento.',
+        'Tiempo promedio en Escalamiento > 2h: los asesores tardan demasiado en contactar al lead.',
+      ],
+    },
+    'transiciones': {
+      titulo: 'Transiciones de etapa recientes',
+      fuente: 'bitrix_eventos (tipo sistema) — últimas 50 transiciones, ordenadas por fecha descendente',
+      que_mide: 'El historial de movimientos de deals entre stages, con el contexto exacto del último mensaje del cliente y la última respuesta del bot en cada transición.',
+      como_leer: [
+        'Deal: ID del deal en Bitrix. Transición: movimiento "etapa anterior → etapa nueva".',
+        'Duración en etapa: tiempo que el deal estuvo en la etapa anterior antes de moverse. "—" = primer movimiento sin historial.',
+        'Último mensaje cliente / Última resp. Vera: contexto textual justo antes del cambio de stage.',
+        'Asesor: ID numérico de Bitrix. Para ver el nombre, buscarlo en Bitrix24 > Empleados.',
+      ],
+      alertas: [
+        'Deal aparece varias veces en secuencia (Rescate 1 → Caído → Rescate 1): posible loop de sincronización en job_bitrix_sync.',
+        'Transición a Caído con último mensaje del cliente positivo ("qué promoción tienen"): el asesor no contactó al lead.',
+        'Duración en IA Porta > 15 min: el bot está tardando demasiado en capturar KPIs. Auditar nodos de sondeo/cierre.',
+      ],
+    },
+    'costo': {
+      titulo: 'Costo del bot por resultado de conversación',
+      fuente: 'bitrix_eventos — filas tipo "bot" con costo_usd registrado (disponible desde jun 2026)',
+      que_mide: 'Cuánto gasta el LLM (en USD) en cada etapa del funnel. Permite identificar etapas costosas y optimizar el uso de tokens.',
+      como_leer: [
+        'Barras (eje izquierdo): costo promedio por mensaje del bot en esa etapa, en USD.',
+        'Línea amarilla (eje derecho): número de conversaciones distintas con actividad del bot en esa etapa.',
+        'Tooltip: muestra costo prom., total, tokens entrada/salida y mensajes del bot para esa etapa.',
+        'Colores: Rojo = IA Porta, Morado = Prospecto, Verde = Venta, Gris = Caído, Azul = resto.',
+      ],
+      alertas: [
+        'Costo en Rescate 2/3 > costo en Prospecto: el bot gasta más tokens en leads fríos que en los que convierten.',
+        'Tokens entrada > 8,000 en etapas tempranas: el historial de conversación es muy extenso; considerar acortar la ventana de contexto.',
+        'Muchas conversaciones en "Sin stage": mensajes del bot sin stage_id asignado (datos históricos previos a la activación del webhook de Bitrix).',
+      ],
+    },
+    'stage': {
+      titulo: 'Distribución por etapa (doughnut)',
+      fuente: 'kpi_conversaciones — estado actual de cada conversación en el periodo',
+      que_mide: 'Cómo están distribuidas las conversaciones activas del periodo entre los distintos stages del pipeline.',
+      como_leer: [
+        'Cada segmento representa un stage. La leyenda muestra: Etapa: N (X%) con cantidad y porcentaje.',
+        'Verde = Venta (resultado exitoso). Gris = Caído. Rojo = IA Porta (aún en manos del bot).',
+        'Un porcentaje alto en IA Porta es normal si el rango de fechas incluye conversaciones recientes.',
+        'El tooltip al pasar el mouse muestra el número exacto de deals y el % del total.',
+      ],
+      alertas: [
+        'Caído > 40%: alta tasa de abandono. Revisar calidad de leads o el guion del bot.',
+        'Escalamiento Humano > 30%: muchos leads solicitan asesor antes de completar el flujo. Revisar nodo de objeciones.',
+        'Venta + Prospecto < 10%: el funnel no está convirtiendo en el periodo analizado.',
+      ],
+    },
+    'mensajes': {
+      titulo: 'Mensajes por actor',
+      fuente: 'kpi_conversaciones — total y promedio de mensajes por tipo de actor en el periodo',
+      que_mide: 'Cuántos mensajes generó cada actor (cliente, bot, asesor) en total y en promedio por conversación.',
+      como_leer: [
+        'Barras (eje izquierdo): total de mensajes acumulados por actor en el periodo.',
+        'Línea amarilla (eje derecho): promedio de mensajes por conversación para cada actor.',
+        'Bot (Vera) con promedio > 5 msg/conv: conversaciones largas — revisar si el bot está siendo eficiente.',
+        'Asesor Humano > 0: indica conversaciones donde el asesor tomó el control activamente.',
+      ],
+      alertas: [
+        'Promedio del cliente > promedio del bot en más del doble: el cliente hace más preguntas de las que el bot responde — posibles lagunas en el guion.',
+        'Promedio del asesor muy alto (> 10): los asesores están gestionando conversaciones largas; considerar mejorar el handoff del bot.',
+      ],
+    },
+    'roi': {
+      titulo: 'ROI de Campaña — CPL, CPA y % Conversión',
+      fuente: 'Meta Marketing API (spend/leads WA) + JOIN kpi_conversaciones / leads (ventas) + bitrix_eventos (costo IA)',
+      que_mide: 'Rentabilidad de la inversión publicitaria: cuánto cuesta cada lead (CPL), cuánto cuesta cada venta (CPA) y qué porcentaje de leads se convierten en ventas, desglosado por campaña.',
+      como_leer: [
+        'KPI Cards: Inversión Meta MXN (gasto total), CPL (inversión / leads WhatsApp), % Conversión (ventas / leads), CPA Meta (inversión / ventas).',
+        'Gráfica horizontal: barras azul = CPL, barras rojas = CPA por campaña. Línea verde = % conversión (eje superior).',
+        'Tabla: una fila por campaña con todos los indicadores. Badge verde = conversión ≥ 5%.',
+        'Si Meta no está disponible, las cards de inversión muestran "—" pero las ventas siguen calculándose.',
+      ],
+      alertas: [
+        'CPL > $150 MXN: costo por lead elevado para la campaña; considerar ajustar la segmentación en Meta.',
+        'CPA > $1,000 MXN: el costo de adquisición por venta es alto; revisar conversión del asesor post-escalamiento.',
+        '% Conversión < 3%: el funnel completo (anuncio → bot → asesor → venta) tiene fuga significativa.',
+        'Campaña con muchos leads pero 0 ventas: el anuncio atrae leads de baja calidad; revisar la segmentación.',
+      ],
+    },
+    'meta': {
+      titulo: 'Meta Ads — Gasto vs Conversaciones WhatsApp',
+      fuente: 'Meta Marketing API — cuenta Portabilidad 2 Callcom (act_3292969264212775)',
+      que_mide: 'Métricas de inversión publicitaria: impresiones, clics, CTR, gasto y conversaciones WhatsApp iniciadas desde anuncios Click-to-WhatsApp.',
+      como_leer: [
+        'KPI Cards: Gasto total MXN, Impresiones, Clics (CTR), Convs. WhatsApp (CPL).',
+        'Gráfica horizontal: barras rojas = gasto MXN (eje inferior), barras verdes = conversaciones WA (eje superior) por campaña/conjunto/anuncio.',
+        'Tabla: detalle completo por entidad. CPC = costo por clic. CPM = costo por 1,000 impresiones.',
+        'Cambiar el nivel (Campaña / Conjunto / Anuncio) para ver el desglose más granular.',
+      ],
+      alertas: [
+        'CTR < 1%: el anuncio no está generando interés. Revisar creativos o segmentación.',
+        'CPL WA > $200 MXN: el costo por conversación WhatsApp es elevado. Comparar con el CPA de ventas para evaluar.',
+        'Conversaciones WA = 0 con gasto > 0: posible problema de atribución o el anuncio no tiene botón Click-to-WhatsApp activo.',
+      ],
+    },
+    'utm': {
+      titulo: 'Atribución UTM / Meta Ads',
+      fuente: 'tabla leads — campos utm_source, utm_campaign, ad_id, ctwa_clid capturados en el webhook de WhatsApp',
+      que_mide: 'Qué anuncios y campañas de Meta originaron los leads del bot, y qué porcentaje de esos leads se convirtió en venta.',
+      como_leer: [
+        '% con UTM capturado: qué tan completa es la atribución. <80% indica que hay leads que entraron sin pasar por un anuncio rastreable.',
+        'Gráfica: leads y ventas por fuente UTM (Facebook, Instagram, etc.).',
+        'Tabla por campaña: leads → prospectos → ventas → tasa de conversión por campaña.',
+        'Tabla por anuncio (Ad ID): qué anuncio individual genera más leads y cuál convierte mejor.',
+      ],
+      alertas: [
+        '% UTM capturado < 60%: muchos leads sin atribución. Verificar que los anuncios de Meta tengan parámetros UTM configurados.',
+        'Campaña con tasa < 2%: mala conversión del embudo completo para ese anuncio. Pausar y revisar.',
+        'Un Ad ID con muchos leads pero 0 ventas: el anuncio atrae curiosos, no compradores. Revisar el copy y la segmentación.',
+      ],
+    },
+    'megacable': {
+      titulo: 'Megacable — KPIs del agente conversacional',
+      fuente: 'BD externa bot_megacable (147.79.78.75:5433) — tablas conversations, conversation_history, agent_runs',
+      que_mide: 'Estado y desempeño del agente conversacional de Megacable: conversaciones activas, cerradas, escaladas y métricas de tiempo.',
+      como_leer: [
+        'KPI Cards: total conversaciones, cerradas vs abiertas, escaladas, tiempo de 1ª respuesta y cierre promedio.',
+        'Doughnut de estado: distribución entre abierta / cerrada / escalada.',
+        'Mensajes por actor: cuánto automatiza el bot vs. cuánto interviene el asesor humano.',
+        'Tabla: historial de conversaciones recientes con timestamps de inicio, cierre y escalamiento.',
+      ],
+      alertas: [
+        'Escaladas > 40%: el bot de Megacable escala demasiado; revisar los nodos de objeciones.',
+        'T. 1ª respuesta > 60s: latencia alta del agente Megacable; revisar la infraestructura del servidor externo.',
+        'T. cierre promedio > 30 min: conversaciones largas; el bot puede no estar cerrando eficientemente.',
+      ],
+    },
+  };
+
+  showInfo(id: string): void { this.activeInfo = id; }
+  closeInfo(): void { this.activeInfo = null; }
+
   openDetail(id: string): void {
     this.router.navigate(['/conversation', id]);
   }

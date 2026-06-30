@@ -74,7 +74,8 @@
 
       <!-- KPI Cards -->
       <div class="cards">
-        <div class="card">
+        <div class="card" style="position:relative">
+          <button class="info-btn" (click)="showInfo('kpi-cards')" title="¿Cómo interpretar estas cards?">ⓘ</button>
           <p class="card-label">Total conversaciones</p>
           <p class="card-value">{{ resumen?.total_conversaciones | number }}</p>
         </div>
@@ -97,7 +98,10 @@
 
       <!-- Funnel de conversión + tabla de transiciones -->
       <div class="chart-card" style="margin-top:1.5rem" [style.display]="funnelData ? 'block' : 'none'">
-        <h3>Funnel de conversión</h3>
+        <div class="chart-header">
+          <h3>Funnel de conversión</h3>
+          <button class="info-btn" (click)="showInfo('funnel')" title="Cómo leer esta gráfica">ⓘ</button>
+        </div>
         @if (funnelLoading) {
           <div class="loading-state">Cargando funnel…</div>
         } @else if (funnelError) {
@@ -115,7 +119,10 @@
           <div class="table-card" style="margin-top:1.5rem">
             <div class="table-header">
               <h3 class="table-title">Transiciones de etapa recientes</h3>
-              <span class="table-count">{{ funnelTransiciones.length }} eventos</span>
+              <div style="display:flex;align-items:center;gap:8px">
+                <button class="info-btn" (click)="showInfo('transiciones')" title="Cómo usar esta tabla">ⓘ</button>
+                <span class="table-count">{{ funnelTransiciones.length }} eventos</span>
+              </div>
             </div>
             <div class="table-wrap">
               <table>
@@ -159,7 +166,10 @@
 
       <!-- Costo LLM por resultado -->
       <div class="chart-card" style="margin-top:1.5rem" [style.display]="costoResumen.length ? 'block' : 'none'">
-        <h3>Costo del bot por resultado de conversación</h3>
+        <div class="chart-header">
+          <h3>Costo del bot por resultado de conversación</h3>
+          <button class="info-btn" (click)="showInfo('costo')" title="Cómo leer esta gráfica">ⓘ</button>
+        </div>
         @if (costoLoading) {
           <div class="loading-state">Cargando costos…</div>
         } @else if (costoError) {
@@ -246,13 +256,19 @@
       <!-- Gráficas -->
       <div class="charts-row">
         <div class="chart-card">
-          <h3>Distribución por etapa</h3>
+          <div class="chart-header">
+            <h3>Distribución por etapa</h3>
+            <button class="info-btn" (click)="showInfo('stage')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
           <div class="chart-wrap">
             <canvas #stageChart></canvas>
           </div>
         </div>
         <div class="chart-card">
-          <h3>Mensajes por actor</h3>
+          <div class="chart-header">
+            <h3>Mensajes por actor</h3>
+            <button class="info-btn" (click)="showInfo('mensajes')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
           <div class="chart-wrap">
             <canvas #msgChart></canvas>
           </div>
@@ -393,7 +409,10 @@
       <!-- Gráfica CPL / CPA / % Conversión por campaña -->
       @if (roiData.campanas.length > 0) {
         <div class="chart-card" style="margin-top:1.5rem">
-          <h3>CPL, CPA y % Conversión por campaña</h3>
+          <div class="chart-header">
+            <h3>CPL, CPA y % Conversión por campaña</h3>
+            <button class="info-btn" (click)="showInfo('roi')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
           <div class="chart-wrap" [style.height.px]="roiData.campanas.length * 52 + 80">
             <canvas #roiChart></canvas>
           </div>
@@ -512,7 +531,10 @@
       <!-- Gráfica gasto vs conversaciones -->
       <div class="charts-row" style="margin-top:1.5rem">
         <div class="chart-card" style="grid-column: 1 / -1">
-          <h3 class="chart-title">Gasto vs Conversaciones WhatsApp por {{ metaData.level === 'campaign' ? 'campaña' : metaData.level === 'adset' ? 'conjunto' : 'anuncio' }}</h3>
+          <div class="chart-header">
+            <h3 class="chart-title">Gasto vs Conversaciones WhatsApp por {{ metaData.level === 'campaign' ? 'campaña' : metaData.level === 'adset' ? 'conjunto' : 'anuncio' }}</h3>
+            <button class="info-btn" (click)="showInfo('meta')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
           <div class="chart-wrap" style="height:360px"><canvas #metaSpendChart></canvas></div>
         </div>
       </div>
@@ -610,7 +632,10 @@
       <!-- Gráfica por fuente -->
       <div class="charts-row" style="margin-top:1.5rem">
         <div class="chart-card" style="grid-column: 1 / -1">
-          <h3 class="chart-title">Leads y ventas por fuente UTM</h3>
+          <div class="chart-header">
+            <h3 class="chart-title">Leads y ventas por fuente UTM</h3>
+            <button class="info-btn" (click)="showInfo('utm')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
           <div class="chart-wrap" style="height:260px"><canvas #utmFuenteChart></canvas></div>
         </div>
       </div>
@@ -755,7 +780,10 @@
       <!-- Gráficas Megacable -->
       <div class="charts-row">
         <div class="chart-card">
-          <h3 class="chart-title">Distribución por estado</h3>
+          <div class="chart-header">
+            <h3 class="chart-title">Distribución por estado</h3>
+            <button class="info-btn" (click)="showInfo('megacable')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
           <div class="chart-wrap"><canvas #mgEstadoChart></canvas></div>
         </div>
         <div class="chart-card">
@@ -832,4 +860,41 @@
     }
 
   </main>
+
+  <!-- ── Modal de información de gráfica ── -->
+  @if (activeInfo && CHART_INFO[activeInfo]) {
+    <div class="info-overlay" (click)="closeInfo()">
+      <div class="info-modal" (click)="$event.stopPropagation()">
+        <div class="info-modal-header">
+          <h2>{{ CHART_INFO[activeInfo].titulo }}</h2>
+          <button class="info-modal-close" (click)="closeInfo()">✕</button>
+        </div>
+        <div class="info-modal-body">
+          <p class="info-fuente"><strong>Fuente:</strong> {{ CHART_INFO[activeInfo].fuente }}</p>
+          <div class="info-section">
+            <h4>¿Qué mide?</h4>
+            <p>{{ CHART_INFO[activeInfo].que_mide }}</p>
+          </div>
+          <div class="info-section">
+            <h4>¿Cómo leerlo?</h4>
+            <ul>
+              @for (item of CHART_INFO[activeInfo].como_leer; track item) {
+                <li>{{ item }}</li>
+              }
+            </ul>
+          </div>
+          @if (CHART_INFO[activeInfo].alertas.length) {
+            <div class="info-section info-alertas">
+              <h4>🚨 Señales de alerta</h4>
+              <ul>
+                @for (alerta of CHART_INFO[activeInfo].alertas; track alerta) {
+                  <li>{{ alerta }}</li>
+                }
+              </ul>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  }
 </div>
