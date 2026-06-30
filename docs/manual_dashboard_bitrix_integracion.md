@@ -10,10 +10,11 @@
 1. [Acceso al Dashboard KPI](#1-acceso-al-dashboard-kpi)
 2. [Secciones del Dashboard](#2-secciones-del-dashboard)
 3. [Detalle de Conversación](#3-detalle-de-conversación)
-4. [Pestaña "Vera · Conversación" en Bitrix24](#4-pestaña-vera--conversación-en-bitrix24)
-5. [Configuración inicial del embed en Bitrix24](#5-configuración-inicial-del-embed-en-bitrix24)
-6. [Re-autorización y mantenimiento](#6-re-autorización-y-mantenimiento)
-7. [Preguntas frecuentes](#7-preguntas-frecuentes)
+4. [Pestañas embebidas en el deal de Bitrix24](#4-pestañas-embebidas-en-el-deal-de-bitrix24)
+5. [Botón de control del bot (Pausar / Activar)](#5-botón-de-control-del-bot-pausar--activar)
+6. [Configuración inicial del embed en Bitrix24](#6-configuración-inicial-del-embed-en-bitrix24)
+7. [Re-autorización y mantenimiento](#7-re-autorización-y-mantenimiento)
+8. [Preguntas frecuentes](#8-preguntas-frecuentes)
 
 ---
 
@@ -164,32 +165,74 @@ El botón **← Volver** regresa a la tabla principal del dashboard conservando 
 
 ---
 
-## 4. Pestaña "Vera · Conversación" en Bitrix24
+## 4. Pestañas embebidas en el deal de Bitrix24
 
-Una vez configurada (ver sección 5), cada deal del pipeline 90 muestra una pestaña adicional llamada **"Vera · Conversación"** junto a las pestañas estándar de Bitrix24 (Actividad, Historia, etc.).
+Cada deal del pipeline 90 tiene **dos pestañas** disponibles, con acceso diferenciado según el rol:
 
-### Qué muestra el asesor al abrir la pestaña
-
-Exactamente la misma información del Detalle de Conversación del dashboard, pero embebida directamente dentro del deal de Bitrix24:
-
-- **KPI cards:** mensajes bot/usuario/asesor y costo total con tokens
-- **Resumen AI** de la conversación
-- **Tabla cronológica de mensajes** con timestamps, badges por actor, costo y tokens del bot
-- **Trazabilidad del pipeline** con tarjetas y tabla de transiciones de stage
-
-### Para qué sirve
-
-El asesor puede ver en un solo vistazo:
-- Qué conversación tuvo el lead con Vera antes de llegar al CRM
-- Qué objeciones presentó, qué promo le interesó, qué nombre y compañía donante mencionó
-- Cuánto costó la conversación del bot
-- En qué etapas estuvo el deal y cuánto tiempo pasó en cada una
-
-Esto elimina la necesidad de abrir el dashboard por separado para consultar el historial.
+| Pestaña | Para quién | Contenido |
+|---|---|---|
+| **"Vera · Conversación"** | Supervisores | Historial completo: KPIs, mensajes, costos, resumen AI, pipeline + botón toggle |
+| **"Control Bot"** | Asesores | Solo el botón Pausar/Activar — sin datos sensibles |
 
 ---
 
-## 5. Configuración inicial del embed en Bitrix24
+### 4.1 Pestaña "Vera · Conversación" (supervisores)
+
+Muestra la misma información del Detalle de Conversación del dashboard, embebida directamente en el deal:
+
+- **Botón toggle** en el header — Pausar/Activar el bot para ese lead
+- **KPI cards:** mensajes bot/usuario/asesor, costo total con tokens
+- **Resumen AI** de la conversación y motivo de escalamiento
+- **Tabla cronológica de mensajes** con timestamps, badges por actor, costo y tokens del bot
+- **Trazabilidad del pipeline** con tarjetas y tabla de transiciones de stage
+
+### 4.2 Pestaña "Control Bot" (asesores)
+
+Vista minimalista — solo lo necesario para controlar el bot:
+
+```
+┌──────────────────────────────┐
+│     Deal #2302394            │
+│   Control del Bot Vera       │
+│                              │
+│   ● Bot Activo               │
+│                              │
+│   [ ⏸ Pausar Bot ]          │
+└──────────────────────────────┘
+```
+
+- **Punto verde + "Bot Activo"** → el bot responde normalmente
+- **Punto rojo + "Bot Pausado"** → el bot ignora mensajes entrantes; el asesor gestiona el chat
+
+El cambio es inmediato y no recarga la página. Sin acceso a mensajes, costos ni resúmenes.
+
+---
+
+## 5. Botón de control del bot (Pausar / Activar)
+
+Disponible en ambas pestañas. Funciona igual en las dos.
+
+### Cómo usarlo
+
+1. Abrir el deal en Bitrix24 y hacer clic en **"Control Bot"** (o "Vera · Conversación")
+2. El estado actual se muestra al cargar — no requiere acción previa
+3. Para pausar: clic en **"⏸ Pausar Bot"** → botón cambia a rojo "▶ Activar Bot"
+4. Para reactivar: clic en **"▶ Activar Bot"** → botón vuelve a verde
+
+### Cuándo pausar el bot
+
+- Cuando el asesor toma el control de la conversación directamente en Open Lines
+- Cuando el cliente está en proceso de portabilidad activa (NIP, validación con el asesor)
+
+### Notas
+
+- La pausa persiste aunque el asesor cierre la pestaña o el deal
+- Si el deal pasa a **Caído** (`C90:LOSE`), el bot se reactiva automáticamente
+- El polling del asesor sigue activo aunque el bot esté pausado — los mensajes del asesor llegan al cliente normalmente vía WhatsApp
+
+---
+
+## 6. Configuración inicial del embed en Bitrix24  
 
 Este proceso se hace **una sola vez** al configurar el sistema por primera vez, o cuando se cambian los scopes de la app en Bitrix24.
 
@@ -262,7 +305,7 @@ Si `"result": true` → el placement quedó registrado.
 
 ---
 
-## 6. Re-autorización y mantenimiento
+## 7. Re-autorización y mantenimiento
 
 ### Cuándo re-autorizar
 
@@ -310,7 +353,7 @@ asyncio.run(main())
 
 ---
 
-## 7. Preguntas frecuentes
+## 8. Preguntas frecuentes
 
 **¿Por qué la pestaña no aparece en el deal?**
 

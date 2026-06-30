@@ -5,9 +5,9 @@ Al finalizar cada ainvoke(), almacena los tokens en Redis con clave
 lee esa clave al insertar el mensaje del bot en bitrix_eventos, guardando
 tokens_entrada, tokens_salida y costo_usd directamente en esa fila.
 
-Precios OpenRouter para anthropic/claude-sonnet-4-5 (junio 2026):
-  Input:  $3.00 / 1M tokens
-  Output: $15.00 / 1M tokens
+Precios OpenRouter para openai/gpt-5.1 (junio 2026):
+  Input:  $1.25 / 1M tokens
+  Output: $10.00 / 1M tokens
 """
 
 import json
@@ -18,8 +18,8 @@ from langchain_core.outputs import LLMResult
 
 logger = logging.getLogger(__name__)
 
-_PRICE_INPUT_PER_TOKEN  = 3.00  / 1_000_000
-_PRICE_OUTPUT_PER_TOKEN = 15.00 / 1_000_000
+_PRICE_INPUT_PER_TOKEN  = 1.25  / 1_000_000
+_PRICE_OUTPUT_PER_TOKEN = 10.00 / 1_000_000
 _REDIS_TTL = 300  # 5 minutos — tiempo máximo entre ainvoke y log_mensaje_evento
 
 

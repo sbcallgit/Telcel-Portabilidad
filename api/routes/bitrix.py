@@ -342,7 +342,7 @@ async def bitrix_stage_event(request: Request) -> dict:
 # Embed CRM — pestaña del deal
 # ---------------------------------------------------------------------------
 
-def _html_embed(deal_id: str, summary: dict | None, totales: dict, eventos: list[dict]) -> str:
+def _html_embed(deal_id: str, summary: dict | None, totales: dict, eventos: list[dict], is_pausado: bool = False) -> str:
     """Genera HTML self-contained para incrustar en la pestaña del deal de Bitrix24."""
     from datetime import timezone as _tz
 
@@ -475,13 +475,20 @@ def _html_embed(deal_id: str, summary: dict | None, totales: dict, eventos: list
     t1r = _fmt_secs((summary or {}).get("tiempo_primera_respuesta_segs"))
     asesor = (summary or {}).get("empleado") or "—"
 
+    btn_bg      = "#dc2626" if not is_pausado else "#16a34a"
+    btn_label   = "⏸ Pausar Bot" if not is_pausado else "▶ Activar Bot"
+    btn_action  = "pause" if not is_pausado else "resume"
+    status_dot  = ("#16a34a", "Activo") if not is_pausado else ("#dc2626", "Pausado")
+    api_base    = settings.bitrix_public_url
+    admin_tok   = settings.admin_token
+
     return f"""<!DOCTYPE html>
 <html lang="es"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Conversación {telefono}</title>
 <style>*{{box-sizing:border-box;margin:0;padding:0}}body{{font-family:Inter,system-ui,sans-serif;background:#f4f6f9;color:#1a202c;font-size:13px;padding:14px}}</style>
 </head><body>
-<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;flex-wrap:wrap">
   <div>
     <h1 style="font-size:16px;font-weight:700">{telefono}</h1>
     <p style="font-size:12px;color:#64748b">
@@ -491,7 +498,55 @@ def _html_embed(deal_id: str, summary: dict | None, totales: dict, eventos: list
       · 1ª respuesta bot: {t1r}
     </p>
   </div>
+  <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+    <span id="bot-status" style="display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:{status_dot[0]}">
+      <span style="width:8px;height:8px;border-radius:50%;background:{status_dot[0]};display:inline-block"></span>
+      Bot {status_dot[1]}
+    </span>
+    <button id="bot-toggle-btn"
+      onclick="toggleBot()"
+      style="background:{btn_bg};color:#fff;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:opacity .15s"
+    >{btn_label}</button>
+  </div>
 </div>
+<script>
+  var _dealId  = "{deal_id}";
+  var _action  = "{btn_action}";
+  var _apiBase = "{api_base}";
+  var _tok     = "{admin_tok}";
+
+  function toggleBot() {{
+    var btn = document.getElementById('bot-toggle-btn');
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+
+    fetch(_apiBase + '/bitrix/bot-toggle', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json', 'X-Admin-Token': _tok}},
+      body: JSON.stringify({{deal_id: _dealId, action: _action}})
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      if (data.status === 'ok') {{
+        var nowPausado = (_action === 'pause');
+        _action = nowPausado ? 'resume' : 'pause';
+        btn.textContent  = nowPausado ? '▶ Activar Bot' : '⏸ Pausar Bot';
+        btn.style.background = nowPausado ? '#16a34a' : '#dc2626';
+        var dot   = document.getElementById('bot-status');
+        var color = nowPausado ? '#dc2626' : '#16a34a';
+        dot.style.color = color;
+        dot.innerHTML = '<span style="width:8px;height:8px;border-radius:50%;background:' + color + ';display:inline-block"></span> Bot ' + (nowPausado ? 'Pausado' : 'Activo');
+      }} else {{
+        alert('Error: ' + (data.detail || data.status));
+      }}
+    }})
+    .catch(function(e) {{ alert('Error de red: ' + e); }})
+    .finally(function() {{
+      btn.disabled = false;
+      btn.style.opacity = '1';
+    }});
+  }}
+</script>
 {cards_html}
 {resumen_html}
 {msgs_html}
@@ -633,7 +688,220 @@ async def bitrix_deal_embed(request: Request) -> str:
         for r in evento_rows
     ]
 
-    logger.info("bitrix_embed_served", extra={"deal_id": deal_id, "id_conversacion": id_conversacion})
-    return _html_embed(deal_id, summary, totales, eventos)
+    from integrations.redis_client import get_redis
+    redis = await get_redis()
+    is_pausado = bool(await redis.get(f"bot_pausado:{id_conversacion}"))
 
+    logger.info("bitrix_embed_served", extra={"deal_id": deal_id, "id_conversacion": id_conversacion, "is_pausado": is_pausado})
+    return _html_embed(deal_id, summary, totales, eventos, is_pausado=is_pausado)
+
+
+# ---------------------------------------------------------------------------
+# Bot toggle desde el iframe del deal
+# ---------------------------------------------------------------------------
+
+@router.post("/bitrix/bot-toggle")
+async def bitrix_bot_toggle(request: Request) -> dict:
+    """Pausa o reactiva el bot para el número vinculado al deal.
+
+    Llamado desde el botón JS del iframe de /bitrix/deal-embed.
+    Body JSON: {"deal_id": "...", "action": "pause"|"resume"}
+    Auth: header X-Admin-Token.
+    """
+    import json as _json
+    from fastapi import HTTPException
+    from fastapi.responses import JSONResponse
+    from integrations.postgres.client import fetchval
+    from integrations.bitrix.client import BitrixClient
+    from integrations.redis_client import get_redis
+
+    # Validar token
+    token = request.headers.get("X-Admin-Token", "")
+    if token != settings.admin_token:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Body JSON inválido")
+
+    deal_id = str(body.get("deal_id", "")).strip()
+    action  = str(body.get("action", "")).strip()
+
+    if not deal_id:
+        raise HTTPException(status_code=422, detail="deal_id requerido")
+    if action not in ("pause", "resume"):
+        raise HTTPException(status_code=422, detail="action debe ser 'pause' o 'resume'")
+
+    # Buscar teléfono desde deal_id
+    phone = await fetchval("SELECT telefono FROM leads WHERE bitrix_lead_id = $1 LIMIT 1", deal_id)
+    if not phone:
+        # Fallback: buscar en bitrix_eventos
+        phone = await fetchval("SELECT id_conversacion FROM bitrix_eventos WHERE deal_id = $1 LIMIT 1", deal_id)
+    if not phone:
+        raise HTTPException(status_code=404, detail=f"No se encontró teléfono para deal_id={deal_id}")
+
+    phone = str(phone)
+    redis = await get_redis()
+    redis_key = f"bot_pausado:{phone}"
+
+    if action == "pause":
+        await redis.set(redis_key, "1")
+    else:
+        await redis.delete(redis_key)
+
+    logger.info("bitrix_embed_bot_toggle", extra={"deal_id": deal_id, "action": action, "phone_tail": phone[-4:]})
+    return {"status": "ok", "action": action, "deal_id": deal_id}
+
+
+# ---------------------------------------------------------------------------
+# Pestaña "Control Bot" — solo el botón, sin datos sensibles (para asesores)
+# ---------------------------------------------------------------------------
+
+def _html_bot_control(deal_id: str, is_pausado: bool) -> str:
+    """HTML minimalista con únicamente el botón de pausa/reactivación del bot."""
+    btn_bg     = "#dc2626" if not is_pausado else "#16a34a"
+    btn_label  = "⏸ Pausar Bot" if not is_pausado else "▶ Activar Bot"
+    btn_action = "pause" if not is_pausado else "resume"
+    dot_color  = "#16a34a" if not is_pausado else "#dc2626"
+    status_txt = "Activo" if not is_pausado else "Pausado"
+    api_base   = settings.bitrix_public_url
+    admin_tok  = settings.admin_token
+
+    return f"""<!DOCTYPE html>
+<html lang="es"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Control Bot</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:Inter,system-ui,sans-serif;background:#f4f6f9;color:#1a202c;
+     display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}}
+.card{{background:#fff;border-radius:14px;padding:32px 40px;box-shadow:0 2px 8px rgba(0,0,0,.1);
+       text-align:center;max-width:340px;width:100%}}
+.status{{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin-bottom:24px}}
+.dot{{width:12px;height:12px;border-radius:50%}}
+.btn{{width:100%;padding:12px 0;border:none;border-radius:10px;font-size:15px;
+      font-weight:700;color:#fff;cursor:pointer;transition:opacity .15s,transform .1s}}
+.btn:active{{transform:scale(.97)}}
+.btn:disabled{{opacity:.6;cursor:not-allowed}}
+.msg{{margin-top:16px;font-size:12px;color:#64748b;min-height:18px}}
+</style>
+</head><body>
+<div class="card">
+  <div style="font-size:13px;color:#94a3b8;margin-bottom:6px">Deal #{deal_id}</div>
+  <h2 style="font-size:17px;font-weight:700;margin-bottom:20px">Control del Bot Vera</h2>
+
+  <div class="status">
+    <span id="dot" class="dot" style="background:{dot_color}"></span>
+    <span id="status-txt">Bot <strong>{status_txt}</strong></span>
+  </div>
+
+  <button id="btn" class="btn" style="background:{btn_bg}" onclick="toggle()">
+    {btn_label}
+  </button>
+  <div id="msg" class="msg"></div>
+</div>
+
+<script>
+  var _dealId  = "{deal_id}";
+  var _action  = "{btn_action}";
+  var _apiBase = "{api_base}";
+  var _tok     = "{admin_tok}";
+
+  function toggle() {{
+    var btn = document.getElementById('btn');
+    var msg = document.getElementById('msg');
+    btn.disabled = true;
+    msg.textContent = 'Aplicando cambio...';
+
+    fetch(_apiBase + '/bitrix/bot-toggle', {{
+      method: 'POST',
+      headers: {{'Content-Type': 'application/json', 'X-Admin-Token': _tok}},
+      body: JSON.stringify({{deal_id: _dealId, action: _action}})
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(data) {{
+      if (data.status === 'ok') {{
+        var nowPausado = (_action === 'pause');
+        _action = nowPausado ? 'resume' : 'pause';
+
+        var color = nowPausado ? '#dc2626' : '#16a34a';
+        document.getElementById('dot').style.background = color;
+        document.getElementById('status-txt').innerHTML =
+          'Bot <strong>' + (nowPausado ? 'Pausado' : 'Activo') + '</strong>';
+
+        btn.style.background = nowPausado ? '#16a34a' : '#dc2626';
+        btn.textContent = nowPausado ? '▶ Activar Bot' : '⏸ Pausar Bot';
+        msg.style.color = '#10b981';
+        msg.textContent = nowPausado ? 'Bot pausado correctamente.' : 'Bot reactivado correctamente.';
+      }} else {{
+        msg.style.color = '#dc2626';
+        msg.textContent = 'Error: ' + (data.detail || data.status);
+      }}
+    }})
+    .catch(function(e) {{
+      msg.style.color = '#dc2626';
+      msg.textContent = 'Error de red. Intenta de nuevo.';
+    }})
+    .finally(function() {{ btn.disabled = false; }});
+  }}
+</script>
+</body></html>"""
+
+
+@router.post("/bitrix/bot-control", response_class=HTMLResponse)
+async def bitrix_bot_control_embed(request: Request) -> str:
+    """Placement handler de la pestaña 'Control Bot' — solo el botón toggle.
+
+    Accesible para asesores sin exponer datos sensibles de la conversación.
+    Misma mecánica de autenticación que /bitrix/deal-embed.
+    """
+    import json as _json
+    from urllib.parse import parse_qs
+    from integrations.redis_client import get_redis
+
+    body = await request.body()
+    raw = parse_qs(body.decode("utf-8", errors="ignore"), keep_blank_values=True)
+
+    def _f(key: str, default: str = "") -> str:
+        vals = raw.get(key, [])
+        return vals[0] if vals else default
+
+    auth_id  = _f("AUTH_ID")
+    domain   = _f("DOMAIN")
+    opts_raw = _f("PLACEMENT_OPTIONS", "{}")
+
+    try:
+        opts = _json.loads(opts_raw) if isinstance(opts_raw, str) else {}
+    except Exception:
+        opts = {}
+
+    deal_id = str(opts.get("ID", "")).strip()
+    if not deal_id:
+        return "<body style='font-family:sans-serif;padding:20px'><p style='color:#991b1b'>No se recibió deal_id.</p></body>"
+
+    # Validar token del asesor contra el portal
+    if auth_id and domain:
+        try:
+            async with __import__("httpx").AsyncClient(timeout=5) as hx:
+                r = await hx.get(f"https://{domain}/rest/profile.json", params={"auth": auth_id})
+                if r.status_code != 200 or r.json().get("error"):
+                    return "<body style='font-family:sans-serif;padding:20px'><p style='color:#991b1b'>Token de Bitrix inválido o expirado.</p></body>"
+        except Exception as exc:
+            logger.warning("bitrix_bot_control_auth_check_failed", extra={"error": str(exc)})
+
+    # Buscar teléfono para leer estado del bot en Redis
+    from integrations.postgres.client import fetchval
+    phone = await fetchval("SELECT telefono FROM leads WHERE bitrix_lead_id = $1 LIMIT 1", deal_id)
+    if not phone:
+        phone = await fetchval("SELECT id_conversacion FROM bitrix_eventos WHERE deal_id = $1 LIMIT 1", deal_id)
+    if not phone:
+        phone = deal_id
+
+    phone = str(phone)
+    redis = await get_redis()
+    is_pausado = bool(await redis.get(f"bot_pausado:{phone}"))
+
+    logger.info("bitrix_bot_control_served", extra={"deal_id": deal_id, "is_pausado": is_pausado})
+    return _html_bot_control(deal_id, is_pausado)
 
