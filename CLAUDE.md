@@ -446,6 +446,8 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **`_TELCEL_TELCEL` en `validacion_node` (fix):** la lista de frases `telcel_a_telcel` solo existía en `sondeo.py` y `oferta.py`. Si el primer mensaje del cliente era "Ya soy cliente de Telcel", `validacion_node` no lo detectaba y caía al LLM, que respondía libre sin escalar. Fix: se agrega `_TELCEL_TELCEL` con 9 variantes en `validacion.py` y su detección en `_validacion_logic` antes del fallback al LLM, estableciendo `escalate_to_human=True` y `motivo_escalacion="telcel_a_telcel"`.
 - **Reactivación de deals Caídos (`C90:LOSE → C90:PREPAYMENT_INVOIC`):** cuando un asesor mueve manualmente un deal a `C90:LOSE` y el cliente vuelve a escribir, el bot lo reactiva automáticamente a `C90:PREPAYMENT_INVOIC` (Recuperación) en lugar de crear un deal nuevo. Tres capas de detección: (1) `validacion_node` lee `leads.bitrix_stage` desde la BD local — funciona dentro de los 30 min del sync; (2) `_fin_node` llama `bx.get_deal()` directamente cuando el estado tiene `etapa=fin` + escalamiento duro, sin depender del sync; (3) `job_bitrix_sync` limpia `bot_pausado:{phone}` en Redis cuando detecta transición a `C90:LOSE`, para que el webhook no bloquee el mensaje. Adicionalmente, `buscar_deal_por_telefono` ya no excluye `C90:LOSE` del fallback (solo excluye `C90:WON`), evitando que se cree un deal duplicado. Al reactivar, se borran los checkpoints LangGraph del teléfono para que la conversación empiece limpia.
 - **Dashboard — mejoras de gráficas (2026-06-24):** (1) Doughnut de stages: leyenda muestra `Etapa: N (X%)` con cantidad y porcentaje generados por `generateLabels`; (2) Mensajes por actor: segunda serie tipo `line` con promedio por conversación en eje Y derecho; (3) Funnel: cambiado de barras horizontales a verticales con línea de `% conversión` acumulada vs primer stage; (4) Meta Ads: cambiado a barras horizontales (`indexAxis: 'y'`) con nombres de campaña completos sin truncar, dos ejes X (gasto abajo, conversaciones arriba).
+- **Dashboard — modal de ayuda contextual ⓘ (2026-06-30):** cada gráfica y sección tiene un botón `ⓘ` que abre un modal con fuente de datos, qué mide, cómo leerla y señales de alerta. Contenido en `CHART_INFO` dentro de `DashboardComponent`. Cubre 9 gráficas. El modal se cierra con clic fuera o en `✕`.
+- **Precios LLM en `agents/callbacks.py` (2026-06-30):** actualizados a `openai/gpt-5.1` via OpenRouter — entrada $1.25/1M tokens, salida $10.00/1M tokens. Actualizar `_PRICE_INPUT_PER_TOKEN` y `_PRICE_OUTPUT_PER_TOKEN` si cambian las tarifas.
 
 ## Sistema de seguimientos automáticos (Rescate)
 
@@ -862,6 +864,8 @@ Panel web en `dashboard/` — accesible en `https://portabilidad.callcomcc.io/da
 4. **Meta Ads — Portabilidad 2 Callcom** — gasto, impresiones, clics, CTR, conversaciones WhatsApp, CPL; gráfica gasto vs conversaciones; tabla detallada. Filtro por fecha y nivel (campaña/conjunto/anuncio)
 5. **Atribución UTM** — leads con UTM capturado, ventas atribuidas; gráfica por fuente; tabla por campaña con tasa de conversión; tabla por Ad ID
 6. **Megacable** — KPI cards del agente Megacable (BD externa), gráficas de estado y mensajes por actor, tabla de conversaciones recientes. Filtro por fecha independiente
+
+**Ayuda contextual ⓘ:** cada gráfica tiene un botón `ⓘ` que abre un modal con fuente de datos, qué mide, cómo leerla y señales de alerta. Contenido definido en `CHART_INFO` dentro de `DashboardComponent`. Cubre las 9 gráficas principales del dashboard.
 
 ### Notas del dashboard
 

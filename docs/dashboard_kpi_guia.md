@@ -6,6 +6,21 @@
 
 ---
 
+## Ayuda contextual — botón ⓘ
+
+Cada gráfica, tabla y sección de KPIs tiene un botón **ⓘ** en su esquina superior derecha. Al hacer clic abre un modal con:
+
+- **Fuente de datos** — qué tabla o API alimenta la gráfica
+- **¿Qué mide?** — descripción en una oración
+- **¿Cómo leerlo?** — puntos concretos para interpretar barras, líneas y tooltips
+- **Señales de alerta** — umbrales que indican un problema operativo (fondo naranja)
+
+El modal se cierra haciendo clic en **✕** o fuera de él. No requiere recargar la página ni navegar a otro documento.
+
+**Gráficas cubiertas:** KPI Cards · Funnel de conversión · Transiciones de etapa · Costo del bot · Distribución por etapa · Mensajes por actor · ROI de Campaña · Meta Ads gasto vs conversaciones · Atribución UTM · Megacable.
+
+---
+
 ## Sección: Telcel Portabilidad
 
 ### Cards de resumen
@@ -195,7 +210,7 @@ Conversaciones donde el bot estuvo activo hasta el cierre. Costo más alto = con
 
 | Modelo | Precio entrada | Precio salida |
 |---|---|---|
-| `anthropic/claude-sonnet-4-5` | $3.00 / 1M tokens | $15.00 / 1M tokens |
+| `openai/gpt-5.1` | $1.25 / 1M tokens | $10.00 / 1M tokens |
 
 Estos precios están hardcodeados en `agents/callbacks.py`. Actualizar si cambian las tarifas de OpenRouter.
 
