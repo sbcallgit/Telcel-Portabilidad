@@ -593,6 +593,18 @@ Tabla aislada del agente (no la usan los nodos). Una fila por conversación. Se 
 - **Destinatarios:** configurados en `REPORT_EMAIL_TO` como lista separada por comas
 - **KPIs en el HTML:** total de conversaciones, ventas WON, tiempo de primera respuesta promedio, tasa de automatización del bot, conversaciones con asesor humano, tiempo de cierre promedio, mensajes promedio por cliente
 - **Sección de inversión y ROI** (aparece solo si `META_ACCESS_TOKEN` está configurado): 4 KPI cards (Inversión Meta MXN, Costo IA USD, CPL, % Conversión lead→venta), tabla de indicadores (CPA Meta, Costo IA por venta) y tabla por campaña (Inversión · Leads · CPL · Ventas · % Conv · CPA). Fuentes: Meta Marketing API para spend/leads WA; JOIN `kpi_conversaciones` + `leads` para ventas por campaña (fuente de verdad); `bitrix_eventos` para costo IA. Si Meta falla, el correo se envía igual sin esa sección.
+  - `% Conversión lead → venta` se calcula sobre `total_leads_reales` (`COUNT(*) FROM leads`), no sobre `total_leads_wa` (métrica de Meta) — Meta cuenta cualquier apertura de chat del anuncio, incluyendo números inválidos o contactos que nunca llegan a escribirle al webhook, lo que infla el denominador y subestima la conversión real.
+  - Las campañas se agrupan por `campaign_id`, no por `campaign_name` — dos campañas activas pueden compartir nombre (reactivaciones, duplicados) y agrupar por nombre las colapsaba, perdiendo el spend de una de las dos.
+- **Sección "Conversión por día"** (últimos 14 días, cohorte por `leads.created_at`): cuenta ventas sobre `leads.bitrix_stage = 'C90:WON'`, **no** sobre `kpi_conversaciones.estado_actual`. Ver regla de frescura de datos abajo — con `kpi_conversaciones` los últimos 1-2 días del reporte mostraban 0% de conversión aunque ya hubiera ventas reales en Bitrix, porque esos leads todavía no habían sido procesados por el export nocturno.
+
+**Regla de frescura de datos (aplica a cualquier KPI nuevo que mida un rango reciente — hoy/ayer/últimos días):**
+
+| Fuente | Se actualiza | Usar para |
+|---|---|---|
+| `kpi_conversaciones` | 1 vez al día, 3am (`job_kpi_export`) | Rangos acumulados/históricos (mes completo, CSV detallado con mensajes/tokens/costos) — el rezago de hasta 24h es aceptable porque para datos de hace una semana ya tuvo tiempo de procesarse |
+| `leads.bitrix_stage` | Cada 30 min (`job_bitrix_sync`) | Rangos recientes (hoy, ayer, últimos 1-2 días) — el snapshot nocturno de `kpi_conversaciones` no alcanza a reflejar ventas cerradas después de las 3am |
+
+En general: para "qué pasó hoy/ayer" usar `leads` (vía `job_bitrix_sync`); para acumulados históricos usar `kpi_conversaciones`.
 
 ### Triggers manuales
 
