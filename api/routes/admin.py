@@ -1161,6 +1161,20 @@ async def get_roi_data(
     )
     total_ventas = int(kpi_row["ventas"]) if kpi_row else 0
 
+    # 2b. Leads reales (tabla leads) — denominador real del % de conversión.
+    #     La métrica de Meta (total_leads_wa) cuenta aperturas de chat que
+    #     nunca llegan a nuestro webhook (número inválido, no llega a escribir,
+    #     etc.), infla el denominador y hace ver la conversión artificialmente baja.
+    leads_row = await db.fetchrow(
+        """
+        SELECT COUNT(*) AS total
+        FROM leads
+        WHERE created_at >= $1 AND created_at <= $2
+        """,
+        desde_ts, hasta_ts,
+    )
+    total_leads_reales = int(leads_row["total"]) if leads_row else 0
+
     # 3. Conversión por campaña — JOIN kpi_conversaciones (estado_actual) + leads (UTM)
     utm_rows = await db.fetch(
         """
@@ -1200,18 +1214,21 @@ async def get_roi_data(
         except Exception as exc:
             logger.warning("roi_meta_error", extra={"error": str(exc)})
 
-    meta_by_name = {r["campaign_name"]: r for r in meta_rows}
+    meta_by_id = {r["campaign_id"]: r for r in meta_rows}
 
-    # 5. Merge por nombre de campaña
-    all_names = set(meta_by_name) | set(utm_by_name)
+    # 5. Merge por campaign_id — dos campañas pueden compartir el mismo nombre
+    #    (ej. "Portabilidad|WhatsApp|Asesor-APIBOT Nw" duplicado), agrupar por
+    #    nombre las colapsaba y perdía el spend de una de las dos.
     campanas: list[dict] = []
-    for name in all_names:
-        m = meta_by_name.get(name, {})
-        u = utm_by_name.get(name, {})
+    nombres_con_meta = {m.get("campaign_name") for m in meta_by_id.values()}
+    for cid, m in meta_by_id.items():
+        name   = m.get("campaign_name") or cid
+        u      = utm_by_name.get(name, {})
         spend  = float(m.get("spend", 0) or 0)
         leads  = int(m.get("wa_conversaciones", 0) or u.get("leads", 0) or 0)
         ventas = int(u.get("ventas", 0) or 0)
         campanas.append({
+            "campaign_id": cid,
             "name":     name,
             "spend":    round(spend, 2),
             "leads":    leads,
@@ -1220,18 +1237,39 @@ async def get_roi_data(
             "cpa":      round(spend / ventas, 2) if ventas else None,
             "pct_conv": round(ventas / leads * 100, 1) if leads else 0.0,
         })
+
+    # Campañas presentes solo en el UTM (sin match en Meta Ads)
+    for name, u in utm_by_name.items():
+        if name in nombres_con_meta:
+            continue
+        leads  = int(u.get("leads", 0) or 0)
+        ventas = int(u.get("ventas", 0) or 0)
+        campanas.append({
+            "campaign_id": None,
+            "name":     name,
+            "spend":    0.0,
+            "leads":    leads,
+            "ventas":   ventas,
+            "cpl":      None,
+            "cpa":      None,
+            "pct_conv": round(ventas / leads * 100, 1) if leads else 0.0,
+        })
+
     campanas.sort(key=lambda x: x["spend"], reverse=True)
 
     # 6. KPIs globales
     cpl_global    = round(total_spend / total_leads_wa, 2) if total_leads_wa else None
     cpa_meta      = round(total_spend / total_ventas, 2)   if total_ventas   else None
     ai_por_venta  = round(ai_cost / total_ventas, 6)       if total_ventas   else None
-    pct_conv      = round(total_ventas / total_leads_wa * 100, 1) if total_leads_wa else 0.0
+    # % conversión sobre leads reales (tabla leads), no sobre la métrica de Meta
+    # (total_leads_wa cuenta aperturas de chat que nunca llegan al webhook).
+    pct_conv      = round(total_ventas / total_leads_reales * 100, 1) if total_leads_reales else 0.0
 
     return JSONResponse({
         "global": {
             "total_spend_mxn":    total_spend,
             "total_leads_wa":     total_leads_wa,
+            "total_leads_reales": total_leads_reales,
             "total_ventas":       total_ventas,
             "ai_cost_usd":        round(ai_cost, 6),
             "cpl":                cpl_global,

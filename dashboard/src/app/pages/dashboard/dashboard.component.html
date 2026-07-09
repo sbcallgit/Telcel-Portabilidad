@@ -383,7 +383,7 @@
         <div class="card card--success">
           <p class="card-label">% Conversión lead → venta</p>
           <p class="card-value">{{ roiData.global.pct_conversion }}%</p>
-          <p class="card-sub">{{ roiData.global.total_ventas }} ventas</p>
+          <p class="card-sub">{{ roiData.global.total_ventas }} ventas / {{ roiData.global.total_leads_reales | number }} leads reales</p>
         </div>
         <div class="card">
           <p class="card-label">CPA Meta (inv. / ventas)</p>
@@ -438,7 +438,7 @@
                 </tr>
               </thead>
               <tbody>
-                @for (c of roiData.campanas; track c.name) {
+                @for (c of roiData.campanas; track c.campaign_id ?? c.name + $index) {
                   <tr>
                     <td>{{ c.name }}</td>
                     <td style="text-align:right">${{ c.spend | number:'1.2-2' }}</td>

@@ -207,6 +207,7 @@ export interface MegacableData {
 }
 
 export interface RoiCampana {
+  campaign_id: string | null;
   name: string;
   spend: number;
   leads: number;
@@ -219,6 +220,7 @@ export interface RoiCampana {
 export interface RoiGlobal {
   total_spend_mxn: number;
   total_leads_wa: number;
+  total_leads_reales: number;
   total_ventas: number;
   ai_cost_usd: number;
   cpl: number | null;

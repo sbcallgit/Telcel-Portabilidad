@@ -120,6 +120,35 @@ async def _get_utm_conversion(inicio: datetime, fin: datetime) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def _get_conversion_by_day(dias: int = 14) -> list[dict]:
+    """% conversión por día de creación del lead (cohorte) — refuerza el acumulado mensual
+    del reporte con una vista diaria que expone variaciones día a día."""
+    desde = datetime.now(tz=timezone.utc) - timedelta(days=dias)
+    rows = await db.fetch(
+        """
+        SELECT
+            date_trunc('day', l.created_at)::date AS dia,
+            COUNT(*)                                              AS leads,
+            COUNT(*) FILTER (WHERE k.estado_actual = 'C90:WON')  AS ventas
+        FROM leads l
+        LEFT JOIN kpi_conversaciones k ON k.id_conversacion = l.telefono
+        WHERE l.created_at >= $1
+        GROUP BY 1
+        ORDER BY 1 DESC
+        """,
+        desde,
+    )
+    return [
+        {
+            "dia":      r["dia"].strftime("%d/%m"),
+            "leads":    r["leads"],
+            "ventas":   r["ventas"],
+            "pct_conv": round(r["ventas"] / r["leads"] * 100, 1) if r["leads"] else 0.0,
+        }
+        for r in rows
+    ]
+
+
 def _merge_campaign_data(meta: dict, utm_conv: list[dict]) -> list[dict]:
     """Fusiona datos de Meta (spend, leads WA) con conversión UTM (ventas) por nombre de campaña."""
     meta_by_name = {r["campaign_name"]: r for r in meta.get("rows", [])}
@@ -169,7 +198,7 @@ async def _build_csv() -> bytes:
     return buf.getvalue().encode("utf-8-sig")
 
 
-def _build_html(stats: dict, rango: str, meta: dict | None = None, ai_cost_usd: float = 0.0, campanas: list[dict] | None = None) -> str:
+def _build_html(stats: dict, rango: str, meta: dict | None = None, ai_cost_usd: float = 0.0, campanas: list[dict] | None = None, conversion_diaria: list[dict] | None = None) -> str:
     total = stats.get("total") or 0
     con_asesor = stats.get("con_asesor") or 0
     ganadas = stats.get("ganadas") or 0
@@ -194,6 +223,28 @@ def _build_html(stats: dict, rango: str, meta: dict | None = None, ai_cost_usd: 
         return f"{float(v):.1f}" if v is not None else "—"
 
     escalamiento_pct = round(con_asesor / total * 100, 1) if total else 0
+
+    # ── Conversión por día (refuerza el acumulado con la variación diaria) ──
+    conversion_html = ""
+    if conversion_diaria:
+        filas_dia = ""
+        for d in conversion_diaria:
+            filas_dia += (
+                f"<tr>"
+                f"<td>{d['dia']}</td>"
+                f"<td style='text-align:right'>{d['leads']}</td>"
+                f"<td style='text-align:right'>{d['ventas']}</td>"
+                f"<td style='text-align:right'>{d['pct_conv']:.1f}%</td>"
+                f"</tr>"
+            )
+        conversion_html = f"""
+    <h3 style="font-size:14px;margin:24px 0 10px;color:#333">Conversión por día (últimos {len(conversion_diaria)} días)</h3>
+    <p style="font-size:11px;color:#999;margin:0 0 8px">Cohortes por día de creación del lead — los días más recientes aún pueden sumar ventas.</p>
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr><th style="background:#f0f0f0;padding:7px 8px;text-align:left">Día</th><th style="background:#f0f0f0;padding:7px 8px;text-align:right">Leads</th><th style="background:#f0f0f0;padding:7px 8px;text-align:right">Ventas</th><th style="background:#f0f0f0;padding:7px 8px;text-align:right">% Conv.</th></tr></thead>
+      <tbody>{filas_dia}</tbody>
+    </table>
+"""
 
     # ── Bloque de inversión (opcional) ──────────────────────────────────────
     inversion_html = ""
@@ -309,6 +360,8 @@ def _build_html(stats: dict, rango: str, meta: dict | None = None, ai_cost_usd: 
       <tr><td>Mensajes promedio por cliente</td><td>{fmt_num(msgs_prom)}</td></tr>
     </table>
 
+    {conversion_html}
+
     <p style="margin-top:20px; font-size:12px; color:#888;">
       El archivo CSV adjunto contiene el detalle completo de todas las conversaciones registradas.
     </p>
@@ -364,17 +417,18 @@ async def send_kpi_report() -> None:
 
         inicio_mes, fin_ayer = _mes_actual_range()
 
-        stats, csv_bytes, meta, ai_cost, utm_conv = await asyncio.gather(
+        stats, csv_bytes, meta, ai_cost, utm_conv, conversion_diaria = await asyncio.gather(
             _get_daily_stats(),
             _build_csv(),
             _get_meta_data(inicio_mes, fin_ayer),
             _get_ai_cost(inicio_mes, fin_ayer),
             _get_utm_conversion(inicio_mes, fin_ayer),
+            _get_conversion_by_day(),
         )
 
         campanas = _merge_campaign_data(meta, utm_conv) if meta else []
         rango = f"{inicio_mes_str} al {fecha}"
-        html = _build_html(stats, rango, meta=meta or None, ai_cost_usd=ai_cost, campanas=campanas)
+        html = _build_html(stats, rango, meta=meta or None, ai_cost_usd=ai_cost, campanas=campanas, conversion_diaria=conversion_diaria)
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _send_smtp, subject, html, csv_bytes, fecha_archivo)
