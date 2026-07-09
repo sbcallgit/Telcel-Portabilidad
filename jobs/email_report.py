@@ -140,17 +140,23 @@ async def _get_leads_reales(inicio: datetime, fin: datetime) -> int:
 
 async def _get_conversion_by_day(dias: int = 14) -> list[dict]:
     """% conversión por día de creación del lead (cohorte) — refuerza el acumulado mensual
-    del reporte con una vista diaria que expone variaciones día a día."""
+    del reporte con una vista diaria que expone variaciones día a día.
+
+    Cuenta ventas sobre leads.bitrix_stage (sincronizado cada 30 min por job_bitrix_sync)
+    en vez de kpi_conversaciones.estado_actual (solo se actualiza una vez al día, a las
+    3am por job_kpi_export) — con kpi_conversaciones, los últimos 1-2 días del reporte
+    mostraban 0% de conversión aunque ya hubiera ventas reales en Bitrix, simplemente
+    porque esos leads todavía no habían sido procesados por el export nocturno.
+    """
     desde = datetime.now(tz=timezone.utc) - timedelta(days=dias)
     rows = await db.fetch(
         """
         SELECT
-            date_trunc('day', l.created_at)::date AS dia,
-            COUNT(*)                                              AS leads,
-            COUNT(*) FILTER (WHERE k.estado_actual = 'C90:WON')  AS ventas
-        FROM leads l
-        LEFT JOIN kpi_conversaciones k ON k.id_conversacion = l.telefono
-        WHERE l.created_at >= $1
+            date_trunc('day', created_at)::date              AS dia,
+            COUNT(*)                                          AS leads,
+            COUNT(*) FILTER (WHERE bitrix_stage = 'C90:WON')  AS ventas
+        FROM leads
+        WHERE created_at >= $1
         GROUP BY 1
         ORDER BY 1 DESC
         """,
