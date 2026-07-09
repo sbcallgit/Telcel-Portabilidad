@@ -120,6 +120,24 @@ async def _get_utm_conversion(inicio: datetime, fin: datetime) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+async def _get_leads_reales(inicio: datetime, fin: datetime) -> int:
+    """Conteo real de leads (tabla leads) — denominador real del % de conversión.
+
+    total_leads_wa (métrica de Meta) cuenta aperturas de chat que nunca llegan
+    a nuestro webhook (número inválido, no llega a escribir, etc.), infla el
+    denominador y hace ver la conversión artificialmente baja.
+    """
+    row = await db.fetchrow(
+        """
+        SELECT COUNT(*) AS total
+        FROM leads
+        WHERE created_at >= $1 AND created_at <= $2
+        """,
+        inicio, fin,
+    )
+    return int(row["total"]) if row else 0
+
+
 async def _get_conversion_by_day(dias: int = 14) -> list[dict]:
     """% conversión por día de creación del lead (cohorte) — refuerza el acumulado mensual
     del reporte con una vista diaria que expone variaciones día a día."""
@@ -150,25 +168,48 @@ async def _get_conversion_by_day(dias: int = 14) -> list[dict]:
 
 
 def _merge_campaign_data(meta: dict, utm_conv: list[dict]) -> list[dict]:
-    """Fusiona datos de Meta (spend, leads WA) con conversión UTM (ventas) por nombre de campaña."""
-    meta_by_name = {r["campaign_name"]: r for r in meta.get("rows", [])}
-    utm_by_name  = {r["campana"]: r for r in utm_conv}
-    all_names    = set(meta_by_name) | set(utm_by_name)
+    """Fusiona datos de Meta (spend, leads WA) con conversión UTM (ventas) por campaign_id.
+
+    Se agrupa por campaign_id (no por nombre) porque dos campañas pueden compartir
+    el mismo nombre — agrupar por nombre las colapsaba y perdía el spend de una de
+    las dos.
+    """
+    meta_by_id  = {r["campaign_id"]: r for r in meta.get("rows", [])}
+    utm_by_name = {r["campana"]: r for r in utm_conv}
+    nombres_con_meta = {m.get("campaign_name") for m in meta_by_id.values()}
 
     merged = []
-    for name in all_names:
-        m = meta_by_name.get(name, {})
-        u = utm_by_name.get(name, {})
-        spend  = m.get("spend", 0) or 0
-        leads  = m.get("wa_conversaciones", 0) or u.get("leads", 0) or 0
-        ventas = u.get("ventas", 0) or 0
+    for cid, m in meta_by_id.items():
+        name   = m.get("campaign_name") or cid
+        u      = utm_by_name.get(name, {})
+        spend  = float(m.get("spend", 0) or 0)
+        leads  = int(m.get("wa_conversaciones", 0) or u.get("leads", 0) or 0)
+        ventas = int(u.get("ventas", 0) or 0)
         merged.append({
+            "campaign_id": cid,
             "name":     name,
-            "spend":    spend,
+            "spend":    round(spend, 2),
             "leads":    leads,
             "ventas":   ventas,
             "cpl":      round(spend / leads, 2)  if leads  else None,
             "cpa":      round(spend / ventas, 2) if ventas else None,
+            "pct_conv": round(ventas / leads * 100, 1) if leads else 0.0,
+        })
+
+    # Campañas presentes solo en el UTM (sin match en Meta Ads)
+    for name, u in utm_by_name.items():
+        if name in nombres_con_meta:
+            continue
+        leads  = int(u.get("leads", 0) or 0)
+        ventas = int(u.get("ventas", 0) or 0)
+        merged.append({
+            "campaign_id": None,
+            "name":     name,
+            "spend":    0.0,
+            "leads":    leads,
+            "ventas":   ventas,
+            "cpl":      None,
+            "cpa":      None,
             "pct_conv": round(ventas / leads * 100, 1) if leads else 0.0,
         })
 
@@ -198,7 +239,7 @@ async def _build_csv() -> bytes:
     return buf.getvalue().encode("utf-8-sig")
 
 
-def _build_html(stats: dict, rango: str, meta: dict | None = None, ai_cost_usd: float = 0.0, campanas: list[dict] | None = None, conversion_diaria: list[dict] | None = None) -> str:
+def _build_html(stats: dict, rango: str, meta: dict | None = None, ai_cost_usd: float = 0.0, campanas: list[dict] | None = None, conversion_diaria: list[dict] | None = None, total_leads_reales: int = 0) -> str:
     total = stats.get("total") or 0
     con_asesor = stats.get("con_asesor") or 0
     ganadas = stats.get("ganadas") or 0
@@ -254,7 +295,9 @@ def _build_html(stats: dict, rango: str, meta: dict | None = None, ai_cost_usd: 
         cpl_global     = round(total_spend / total_leads_wa, 2) if total_leads_wa else None
         cpa_meta       = round(total_spend / ganadas, 2) if ganadas else None
         ai_por_venta   = round(ai_cost_usd / ganadas, 4) if ganadas else None
-        conv_pct       = round(ganadas / total_leads_wa * 100, 1) if total_leads_wa else 0.0
+        # % conversión sobre leads reales (tabla leads), no sobre la métrica de Meta
+        # (total_leads_wa cuenta aperturas de chat que nunca llegan al webhook).
+        conv_pct       = round(ganadas / total_leads_reales * 100, 1) if total_leads_reales else 0.0
 
         def _mxn(v) -> str:
             return f"${v:,.2f} MXN" if v is not None else "—"
@@ -311,6 +354,7 @@ def _build_html(stats: dict, rango: str, meta: dict | None = None, ai_cost_usd: 
     <tr><td style="padding:8px 10px;border-bottom:1px solid #eee">CPA Meta (inversión / ventas)</td><td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right">{_mxn(cpa_meta)}</td></tr>
     <tr><td style="padding:8px 10px;border-bottom:1px solid #eee">Costo IA por venta</td><td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right">{_usd(ai_por_venta)}</td></tr>
     <tr><td style="padding:8px 10px;border-bottom:1px solid #eee">Leads WhatsApp (Meta)</td><td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right">{total_leads_wa}</td></tr>
+    <tr><td style="padding:8px 10px;border-bottom:1px solid #eee">Leads reales (tabla leads)</td><td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right">{total_leads_reales}</td></tr>
     <tr><td style="padding:8px 10px">Ventas cerradas</td><td style="padding:8px 10px;text-align:right">{ganadas}</td></tr>
   </table>
 
@@ -417,18 +461,22 @@ async def send_kpi_report() -> None:
 
         inicio_mes, fin_ayer = _mes_actual_range()
 
-        stats, csv_bytes, meta, ai_cost, utm_conv, conversion_diaria = await asyncio.gather(
+        stats, csv_bytes, meta, ai_cost, utm_conv, conversion_diaria, total_leads_reales = await asyncio.gather(
             _get_daily_stats(),
             _build_csv(),
             _get_meta_data(inicio_mes, fin_ayer),
             _get_ai_cost(inicio_mes, fin_ayer),
             _get_utm_conversion(inicio_mes, fin_ayer),
             _get_conversion_by_day(),
+            _get_leads_reales(inicio_mes, fin_ayer),
         )
 
         campanas = _merge_campaign_data(meta, utm_conv) if meta else []
         rango = f"{inicio_mes_str} al {fecha}"
-        html = _build_html(stats, rango, meta=meta or None, ai_cost_usd=ai_cost, campanas=campanas, conversion_diaria=conversion_diaria)
+        html = _build_html(
+            stats, rango, meta=meta or None, ai_cost_usd=ai_cost, campanas=campanas,
+            conversion_diaria=conversion_diaria, total_leads_reales=total_leads_reales,
+        )
 
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _send_smtp, subject, html, csv_bytes, fecha_archivo)
