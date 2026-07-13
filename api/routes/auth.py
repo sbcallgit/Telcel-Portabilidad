@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import JSONResponse
 import bcrypt
 from jose import jwt
@@ -50,7 +50,7 @@ async def login(body: LoginRequest) -> JSONResponse:
 
 
 @router.get("/me")
-async def me(authorization: str = "") -> JSONResponse:
+async def me(authorization: str = Header("")) -> JSONResponse:
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="No autenticado")
     try:
