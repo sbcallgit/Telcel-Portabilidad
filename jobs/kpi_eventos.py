@@ -6,11 +6,10 @@ el timeline completo de cada conversación con el stage vigente en
 cada momento.
 
 Funciones principales:
-- log_mensaje_evento(): registra cada mensaje (usuario/bot/humano) — llamada
-  desde api/routes/webhooks.py, jobs/connector_poll.py e
-  integrations/bitrix/connector.py.
-- upsert_deal_timeline(): registra cambios de stage — llamada desde
-  api/routes/bitrix.py (POST /bitrix/stage-event).
+- upsert_eventos_from_bitrix(): llamada desde kpi_export._upsert() para
+  mantener la tabla actualizada con datos frescos de Bitrix.
+- seed_from_kpi_conversaciones(): migración inicial que llama a Bitrix
+  por cada conversación registrada en kpi_conversaciones.
 """
 
 import asyncio
@@ -255,6 +254,8 @@ async def upsert_eventos_from_bitrix(
     empleado_id: str = "",
 ) -> None:
     """Inserta/actualiza eventos de mensajes y cambios de etapa para una conversación.
+
+    Llamado desde kpi_export._upsert() con datos frescos de Bitrix.
 
     raw_messages: respuesta de im.dialog.messages.get → result → messages
     raw_history: respuesta de crm.stagehistory.list → result → items

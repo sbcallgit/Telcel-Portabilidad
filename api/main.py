@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.admin import router as admin_router
+from api.routes.auth import router as auth_router
 from api.routes.bitrix import router as bitrix_router
 from api.routes.bitrix_bot_control import router as bitrix_bot_control_router
 from api.routes.connector import router as connector_router
@@ -84,7 +85,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[],
+    allow_origins=["https://kpi.callcomcc.io", "http://localhost:4200"],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["X-Admin-Token", "Authorization", "Content-Type"],
 )
@@ -113,4 +114,5 @@ app.include_router(telegram_router)
 app.include_router(bitrix_router)
 app.include_router(bitrix_bot_control_router)
 app.include_router(connector_router)
+app.include_router(auth_router)
 app.include_router(admin_router)

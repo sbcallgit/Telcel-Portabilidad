@@ -1,0 +1,900 @@
+<div class="layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <span class="dot"></span>
+      <span>KPI Dashboard</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item active" routerLink="/dashboard">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+        Resumen
+      </a>
+      <a class="nav-item" routerLink="/analytics">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+        Analytics
+      </a>
+    </nav>
+    <button class="logout-btn" (click)="logout()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16,17 21,12 16,7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      Cerrar sesión
+    </button>
+  </aside>
+
+  <!-- Main -->
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 class="page-title">Conversaciones</h1>
+        <p class="page-sub">Telcel Portabilidad · Región 4 · Muévete Prepago</p>
+      </div>
+      <div class="topbar-actions">
+        <button class="btn-secondary" (click)="triggerExport()" [disabled]="exportLoading">
+          @if (exportLoading) { Exportando... } @else { Exportar CSV }
+        </button>
+        @if (exportMsg) { <span class="export-msg">{{ exportMsg }}</span> }
+      </div>
+    </header>
+
+    <!-- Filtros -->
+    <div class="filters">
+      <div class="filter-group">
+        <label>Desde</label>
+        <input type="date" [(ngModel)]="desde" />
+      </div>
+      <div class="filter-group">
+        <label>Hasta</label>
+        <input type="date" [(ngModel)]="hasta" />
+      </div>
+      <div class="filter-group">
+        <label>Stage</label>
+        <select [(ngModel)]="stageFilter">
+          @for (opt of stageOptions; track opt.value) {
+            <option [value]="opt.value">{{ opt.label }}</option>
+          }
+        </select>
+      </div>
+      <div class="filter-group">
+        <label>Buscar</label>
+        <input type="text" [(ngModel)]="search" placeholder="Teléfono, asesor, resumen…" (keyup.enter)="applyFilter()" />
+      </div>
+      <button class="btn-primary" (click)="applyFilter()">Filtrar</button>
+      <button class="btn-ghost" (click)="clearFilter()">Limpiar</button>
+    </div>
+
+    @if (loading) {
+      <div class="loading-wrap">
+        <div class="spinner"></div>
+        <span>Cargando datos…</span>
+      </div>
+    } @else if (error) {
+      <div class="alert-error">{{ error }}</div>
+    } @else {
+
+      <!-- KPI Cards -->
+      <div class="cards">
+        <div class="card" style="position:relative">
+          <button class="info-btn" (click)="showInfo('kpi-cards')" title="¿Cómo interpretar estas cards?">ⓘ</button>
+          <p class="card-label">Total conversaciones</p>
+          <p class="card-value">{{ resumen?.total_conversaciones | number }}</p>
+        </div>
+        <div class="card card--success">
+          <p class="card-label">Conversiones (Venta)</p>
+          <p class="card-value">{{ resumen?.conversiones | number }}</p>
+          <p class="card-sub">{{ resumen?.tasa_conversion }}% tasa</p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">Tiempo 1ª respuesta</p>
+          <p class="card-value">{{ formatSecs(resumen?.avg_primera_respuesta_segs ?? null) }}</p>
+          <p class="card-sub">promedio</p>
+        </div>
+        <div class="card card--warning">
+          <p class="card-label">Escalados a asesor</p>
+          <p class="card-value">{{ resumen?.escalados | number }}</p>
+          <p class="card-sub">con asesor humano</p>
+        </div>
+      </div>
+
+      <!-- Funnel de conversión + tabla de transiciones -->
+      <div class="chart-card" style="margin-top:1.5rem" [style.display]="funnelData ? 'block' : 'none'">
+        <div class="chart-header">
+          <h3>Funnel de conversión</h3>
+          <button class="info-btn" (click)="showInfo('funnel')" title="Cómo leer esta gráfica">ⓘ</button>
+        </div>
+        @if (funnelLoading) {
+          <div class="loading-state">Cargando funnel…</div>
+        } @else if (funnelError) {
+          <div class="error-state">{{ funnelError }}</div>
+        } @else {
+          <div class="chart-wrap" style="height:280px">
+            <canvas #funnelChart></canvas>
+          </div>
+        }
+      </div>
+
+      @if (!funnelLoading && !funnelError && funnelData) {
+        <!-- Tabla de transiciones recientes -->
+        @if (funnelTransiciones.length > 0) {
+          <div class="table-card" style="margin-top:1.5rem">
+            <div class="table-header">
+              <h3 class="table-title">Transiciones de etapa recientes</h3>
+              <div style="display:flex;align-items:center;gap:8px">
+                <button class="info-btn" (click)="showInfo('transiciones')" title="Cómo usar esta tabla">ⓘ</button>
+                <span class="table-count">{{ funnelTransiciones.length }} eventos</span>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Deal</th>
+                    <th>Teléfono</th>
+                    <th>Transición</th>
+                    <th>Duración en etapa</th>
+                    <th>Fecha</th>
+                    <th>Asesor</th>
+                    <th>Último mensaje cliente</th>
+                    <th>Última resp. Vera</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (t of funnelTransiciones; track t.deal_id + t.fecha_evento) {
+                    <tr>
+                      <td class="mono">{{ t.deal_id }}</td>
+                      <td class="mono">{{ t.telefono || '—' }}</td>
+                      <td>
+                        @if (t.stage_anterior) {
+                          <span class="badge" [attr.data-stage]="t.stage_anterior">{{ t.stage_anterior }}</span>
+                          <span style="margin:0 4px;color:#94a3b8">→</span>
+                        }
+                        <span class="badge" [attr.data-stage]="t.stage_nuevo">{{ t.stage_nuevo }}</span>
+                      </td>
+                      <td class="num">{{ t.duracion || '—' }}</td>
+                      <td class="date">{{ t.fecha_evento ? (t.fecha_evento | date:'dd/MM/yy HH:mm') : '—' }}</td>
+                      <td>{{ t.empleado_id || '—' }}</td>
+                      <td class="resumen-cell" [title]="t.ultimo_usuario">{{ t.ultimo_usuario || '—' }}</td>
+                      <td class="resumen-cell" [title]="t.ultimo_bot">{{ t.ultimo_bot || '—' }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+        }
+      }
+
+      <!-- Costo LLM por resultado -->
+      <div class="chart-card" style="margin-top:1.5rem" [style.display]="costoResumen.length ? 'block' : 'none'">
+        <div class="chart-header">
+          <h3>Costo del bot por resultado de conversación</h3>
+          <button class="info-btn" (click)="showInfo('costo')" title="Cómo leer esta gráfica">ⓘ</button>
+        </div>
+        @if (costoLoading) {
+          <div class="loading-state">Cargando costos…</div>
+        } @else if (costoError) {
+          <div class="error-state">{{ costoError }}</div>
+        }
+        <div class="chart-wrap" style="height:280px">
+          <canvas #costoChart></canvas>
+        </div>
+        @if (!costoLoading && !costoError && costoResumen.length) {
+          <!-- Tabla resumen por stage -->
+          <div class="table-card" style="margin-top:1rem;box-shadow:none;padding:0">
+            <div class="table-header" style="padding:0.5rem 0 0.25rem">
+              <h4 style="margin:0;font-size:0.85rem;color:#64748b">Resumen por etapa</h4>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Etapa</th>
+                    <th style="text-align:right">Convs.</th>
+                    <th style="text-align:right">Msgs bot</th>
+                    <th style="text-align:right">Costo prom. (USD)</th>
+                    <th style="text-align:right">Costo total (USD)</th>
+                    <th style="text-align:right">Tokens entrada</th>
+                    <th style="text-align:right">Tokens salida</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (r of costoResumen; track r.stage_id) {
+                    <tr>
+                      <td><strong>{{ r.stage_nombre }}</strong></td>
+                      <td style="text-align:right">{{ r.conversaciones }}</td>
+                      <td style="text-align:right">{{ r.mensajes_bot }}</td>
+                      <td style="text-align:right">${{ r.costo_promedio_usd.toFixed(4) }}</td>
+                      <td style="text-align:right">${{ r.costo_total_usd.toFixed(4) }}</td>
+                      <td style="text-align:right">{{ r.avg_tokens_entrada.toLocaleString() }}</td>
+                      <td style="text-align:right">{{ r.avg_tokens_salida.toLocaleString() }}</td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <!-- Tabla detalle por conversación con deal_id -->
+          @if (costoDetalle.length) {
+            <div class="table-card" style="margin-top:1rem;box-shadow:none;padding:0">
+              <div class="table-header" style="padding:0.5rem 0 0.25rem">
+                <h4 style="margin:0;font-size:0.85rem;color:#64748b">Detalle por conversación</h4>
+                <span class="table-count">{{ costoDetalle.length }} registros</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Deal ID</th>
+                      <th>Conversación</th>
+                      <th>Etapa</th>
+                      <th style="text-align:right">Msgs bot</th>
+                      <th style="text-align:right">Costo total (USD)</th>
+                      <th style="text-align:right">Tokens entrada</th>
+                      <th style="text-align:right">Tokens salida</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    @for (d of costoDetalle; track d.id_conversacion + d.stage_id) {
+                      <tr>
+                        <td><code>{{ d.deal_id || '—' }}</code></td>
+                        <td><code>{{ d.id_conversacion }}</code></td>
+                        <td>{{ d.stage_nombre }}</td>
+                        <td style="text-align:right">{{ d.mensajes_bot }}</td>
+                        <td style="text-align:right">${{ d.costo_total_usd.toFixed(4) }}</td>
+                        <td style="text-align:right">{{ d.tokens_entrada.toLocaleString() }}</td>
+                        <td style="text-align:right">{{ d.tokens_salida.toLocaleString() }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          }
+        }
+      </div>
+
+      <!-- Gráficas -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Distribución por etapa</h3>
+            <button class="info-btn" (click)="showInfo('stage')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
+          <div class="chart-wrap">
+            <canvas #stageChart></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>Mensajes por actor</h3>
+            <button class="info-btn" (click)="showInfo('mensajes')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
+          <div class="chart-wrap">
+            <canvas #msgChart></canvas>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabla -->
+      <div class="table-card">
+        <div class="table-header">
+          <h3>Conversaciones recientes</h3>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Teléfono</th>
+                <th>Stage</th>
+                <th>Asesor</th>
+                <th>Inicio</th>
+                <th>Msgs Bot</th>
+                <th>Msgs Cliente</th>
+                <th>Msgs Asesor</th>
+                <th>1ª Resp.</th>
+                <th>Motivo Escalamiento</th>
+                <th>Resumen</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of filteredConversaciones; track c.id_conversacion) {
+                <tr class="row-clickable" (click)="openDetail(c.id_conversacion)" title="Ver detalle">
+                  <td class="mono">{{ c.telefono || '—' }}</td>
+                  <td><span class="badge" [attr.data-stage]="c.estado_actual">{{ stageLabel(c.estado_actual) }}</span></td>
+                  <td>{{ c.empleado || '—' }}</td>
+                  <td class="date">{{ c.creado_el ? (c.creado_el | date:'dd/MM/yy HH:mm') : '—' }}</td>
+                  <td class="num">{{ c.mensajes_bot }}</td>
+                  <td class="num">{{ c.mensajes_cliente }}</td>
+                  <td class="num">{{ c.mensajes_humano }}</td>
+                  <td class="num">{{ formatSecs(c.tiempo_primera_respuesta_segs) }}</td>
+                  <td>{{ c.motivo_escalacion || '—' }}</td>
+                  <td class="resumen-cell" [title]="c.resumen">{{ c.resumen || '—' }}</td>
+                </tr>
+              }
+              @empty {
+                <tr><td colspan="10" class="empty">Sin conversaciones en este rango.</td></tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Paginación -->
+        <div class="pagination">
+          <span class="pg-info">
+            {{ (paginacion.page - 1) * paginacion.page_size + 1 }}–{{ minVal(paginacion.page * paginacion.page_size, paginacion.total) }}
+            de {{ paginacion.total | number }}
+          </span>
+          <div class="pg-btns">
+            <button (click)="goPage(1)" [disabled]="paginacion.page === 1">&laquo;</button>
+            <button (click)="goPage(paginacion.page - 1)" [disabled]="paginacion.page === 1">&lsaquo;</button>
+            @for (p of pages; track p) {
+              <button (click)="goPage(p)" [class.active]="p === paginacion.page">{{ p }}</button>
+            }
+            <button (click)="goPage(paginacion.page + 1)" [disabled]="paginacion.page === paginacion.total_pages">&rsaquo;</button>
+            <button (click)="goPage(paginacion.total_pages)" [disabled]="paginacion.page === paginacion.total_pages">&raquo;</button>
+          </div>
+        </div>
+      </div>
+
+    }
+
+    <!-- ═══════════════════════════════════════════════════════════
+         SECCIÓN ROI DE CAMPAÑA
+    ════════════════════════════════════════════════════════════════ -->
+    <div class="section-divider">
+      <span>ROI de Campaña</span>
+    </div>
+
+    <div class="filters">
+      <div class="filter-group">
+        <label>Desde</label>
+        <input type="date" [(ngModel)]="roiDesde" />
+      </div>
+      <div class="filter-group">
+        <label>Hasta</label>
+        <input type="date" [(ngModel)]="roiHasta" />
+      </div>
+      <button class="btn-primary" (click)="applyRoiFilter()">Filtrar</button>
+      <button class="btn-ghost" (click)="clearRoiFilter()">Limpiar</button>
+    </div>
+
+    @if (roiLoading) {
+      <div class="loading-state">Cargando ROI…</div>
+    } @else if (roiError) {
+      <div class="error-state">{{ roiError }}</div>
+    } @else if (roiData) {
+
+      <!-- KPI cards globales -->
+      <div class="cards">
+        <div class="card card--warning">
+          <p class="card-label">Inversión Meta Ads</p>
+          <p class="card-value">${{ roiData.global.total_spend_mxn | number:'1.2-2' }}</p>
+          <p class="card-sub">MXN · {{ roiDesde || 'últimos 30 días' }}</p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">CPL (costo por lead)</p>
+          <p class="card-value">
+            @if (roiData.global.cpl) { ${{ roiData.global.cpl | number:'1.2-2' }} MXN }
+            @else { — }
+          </p>
+          <p class="card-sub">{{ roiData.global.total_leads_wa | number }} leads WhatsApp</p>
+        </div>
+        <div class="card card--success">
+          <p class="card-label">% Conversión lead → venta</p>
+          <p class="card-value">{{ roiData.global.pct_conversion }}%</p>
+          <p class="card-sub">{{ roiData.global.total_ventas }} ventas / {{ roiData.global.total_leads_reales | number }} leads reales</p>
+        </div>
+        <div class="card">
+          <p class="card-label">CPA Meta (inv. / ventas)</p>
+          <p class="card-value">
+            @if (roiData.global.cpa_meta) { ${{ roiData.global.cpa_meta | number:'1.2-2' }} MXN }
+            @else { — }
+          </p>
+          <p class="card-sub">
+            @if (roiData.global.ai_costo_por_venta) {
+              + ${{ roiData.global.ai_costo_por_venta | number:'1.4-4' }} USD IA/venta
+            }
+          </p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">Costo IA (LLM) del periodo</p>
+          <p class="card-value">${{ roiData.global.ai_cost_usd | number:'1.4-4' }} USD</p>
+          <p class="card-sub">
+            @if (!roiData.global.meta_disponible) { Meta no disponible }
+          </p>
+        </div>
+      </div>
+
+      <!-- Gráfica CPL / CPA / % Conversión por campaña -->
+      @if (roiData.campanas.length > 0) {
+        <div class="chart-card" style="margin-top:1.5rem">
+          <div class="chart-header">
+            <h3>CPL, CPA y % Conversión por campaña</h3>
+            <button class="info-btn" (click)="showInfo('roi')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
+          <div class="chart-wrap" [style.height.px]="roiData.campanas.length * 52 + 80">
+            <canvas #roiChart></canvas>
+          </div>
+        </div>
+
+        <!-- Tabla por campaña -->
+        <div class="table-card" style="margin-top:1.5rem">
+          <div class="table-header">
+            <h3 class="table-title">Desglose por campaña</h3>
+            <span class="table-count">{{ roiData.campanas.length }} campañas</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Campaña</th>
+                  <th style="text-align:right">Inversión (MXN)</th>
+                  <th style="text-align:right">Leads</th>
+                  <th style="text-align:right">CPL</th>
+                  <th style="text-align:right">Ventas</th>
+                  <th style="text-align:right">% Conv.</th>
+                  <th style="text-align:right">CPA</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (c of roiData.campanas; track c.campaign_id ?? c.name + $index) {
+                  <tr>
+                    <td>{{ c.name }}</td>
+                    <td style="text-align:right">${{ c.spend | number:'1.2-2' }}</td>
+                    <td style="text-align:right">{{ c.leads | number }}</td>
+                    <td style="text-align:right">
+                      @if (c.cpl) { ${{ c.cpl | number:'1.2-2' }} } @else { — }
+                    </td>
+                    <td style="text-align:right">{{ c.ventas }}</td>
+                    <td style="text-align:right">
+                      <span class="badge" [ngClass]="{'badge-green': c.pct_conv >= 5, 'badge-blue': c.pct_conv > 0 && c.pct_conv < 5}">
+                        {{ c.pct_conv }}%
+                      </span>
+                    </td>
+                    <td style="text-align:right">
+                      @if (c.cpa) { ${{ c.cpa | number:'1.2-2' }} } @else { — }
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      } @else {
+        <div class="table-card" style="margin-top:1.5rem">
+          <p class="empty">Sin datos de campaña — los leads de Meta Ads con UTM capturado aparecerán aquí.</p>
+        </div>
+      }
+
+    }
+
+    <!-- ═══════════════════════════════════════════════════════════
+         SECCIÓN META ADS — AD INSIGHTS
+    ════════════════════════════════════════════════════════════════ -->
+    <div class="section-divider">
+      <span>Meta Ads — Portabilidad 2 Callcom</span>
+    </div>
+
+    <div class="filters">
+      <div class="filter-group">
+        <label>Desde</label>
+        <input type="date" [(ngModel)]="metaDesde" />
+      </div>
+      <div class="filter-group">
+        <label>Hasta</label>
+        <input type="date" [(ngModel)]="metaHasta" />
+      </div>
+      <div class="filter-group">
+        <label>Nivel</label>
+        <select [(ngModel)]="metaLevel">
+          <option value="campaign">Campaña</option>
+          <option value="adset">Conjunto</option>
+          <option value="ad">Anuncio</option>
+        </select>
+      </div>
+      <button class="btn-primary" (click)="applyMetaFilter()">Filtrar</button>
+      <button class="btn-ghost" (click)="clearMetaFilter()">Limpiar</button>
+    </div>
+
+    @if (metaLoading) {
+      <div class="loading-state">Cargando datos de Meta Ads…</div>
+    } @else if (metaError) {
+      <div class="error-state">{{ metaError }}</div>
+    } @else if (metaData) {
+
+      <!-- KPI cards Meta -->
+      <div class="cards">
+        <div class="card card--warning">
+          <p class="card-label">Gasto total</p>
+          <p class="card-value">${{ metaData.resumen.total_spend | number:'1.2-2' }}</p>
+          <p class="card-sub">MXN</p>
+        </div>
+        <div class="card">
+          <p class="card-label">Impresiones</p>
+          <p class="card-value">{{ metaData.resumen.total_impressions | number }}</p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">Clics</p>
+          <p class="card-value">{{ metaData.resumen.total_clicks | number }}</p>
+          <p class="card-sub">CTR {{ metaData.resumen.avg_ctr }}%</p>
+        </div>
+        <div class="card card--success">
+          <p class="card-label">Convs. WhatsApp</p>
+          <p class="card-value">{{ metaData.resumen.total_wa_convs | number }}</p>
+          <p class="card-sub">
+            @if (metaData.resumen.cpl_wa) { CPL ${{ metaData.resumen.cpl_wa | number:'1.2-2' }} }
+          </p>
+        </div>
+      </div>
+
+      <!-- Gráfica gasto vs conversaciones -->
+      <div class="charts-row" style="margin-top:1.5rem">
+        <div class="chart-card" style="grid-column: 1 / -1">
+          <div class="chart-header">
+            <h3 class="chart-title">Gasto vs Conversaciones WhatsApp por {{ metaData.level === 'campaign' ? 'campaña' : metaData.level === 'adset' ? 'conjunto' : 'anuncio' }}</h3>
+            <button class="info-btn" (click)="showInfo('meta')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
+          <div class="chart-wrap" style="height:360px"><canvas #metaSpendChart></canvas></div>
+        </div>
+      </div>
+
+      <!-- Tabla detalle -->
+      <div class="table-card" style="margin-top:1.5rem">
+        <div class="table-header">
+          <h3 class="table-title">Detalle por {{ metaData.level === 'campaign' ? 'campaña' : metaData.level === 'adset' ? 'conjunto de anuncios' : 'anuncio' }}</h3>
+          <span class="table-count">{{ metaData.rows.length }} filas</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Nombre</th>
+                <th style="text-align:right">Gasto</th>
+                <th style="text-align:right">Impresiones</th>
+                <th style="text-align:right">Clics</th>
+                <th style="text-align:right">CTR</th>
+                <th style="text-align:right">CPC</th>
+                <th style="text-align:right">CPM</th>
+                <th style="text-align:right">Convs WA</th>
+                <th style="text-align:right">CPL WA</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of metaData.rows; track row.campaign_id + row.ad_id) {
+                <tr>
+                  <td>{{ row.campaign_name }}</td>
+                  <td style="text-align:right">${{ row.spend | number:'1.2-2' }}</td>
+                  <td style="text-align:right">{{ row.impressions | number }}</td>
+                  <td style="text-align:right">{{ row.clicks | number }}</td>
+                  <td style="text-align:right">{{ row.ctr }}%</td>
+                  <td style="text-align:right">${{ row.cpc | number:'1.2-2' }}</td>
+                  <td style="text-align:right">${{ row.cpm | number:'1.2-2' }}</td>
+                  <td style="text-align:right">{{ row.wa_conversaciones }}</td>
+                  <td style="text-align:right">{{ row.cpa_wa ? ('$' + (row.cpa_wa | number:'1.2-2')) : '—' }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    }
+
+    <!-- ═══════════════════════════════════════════════════════════
+         SECCIÓN ATRIBUCIÓN UTM
+    ════════════════════════════════════════════════════════════════ -->
+    <div class="section-divider">
+      <span>Atribución UTM / Meta Ads</span>
+    </div>
+
+    <div class="filters">
+      <div class="filter-group">
+        <label>Desde</label>
+        <input type="date" [(ngModel)]="utmDesde" />
+      </div>
+      <div class="filter-group">
+        <label>Hasta</label>
+        <input type="date" [(ngModel)]="utmHasta" />
+      </div>
+      <button class="btn-primary" (click)="applyUtmFilter()">Filtrar</button>
+      <button class="btn-ghost" (click)="clearUtmFilter()">Limpiar</button>
+    </div>
+
+    @if (utmLoading) {
+      <div class="loading-state">Cargando datos de atribución…</div>
+    } @else if (utmError) {
+      <div class="error-state">{{ utmError }}</div>
+    } @else if (utmData) {
+
+      <!-- KPI cards UTM -->
+      <div class="cards">
+        <div class="card">
+          <p class="card-label">Total leads</p>
+          <p class="card-value">{{ utmData.resumen.total_leads | number }}</p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">Con UTM capturado</p>
+          <p class="card-value">{{ utmData.resumen.con_utm | number }}</p>
+          <p class="card-sub">{{ utmData.resumen.pct_con_utm }}% del total</p>
+        </div>
+        <div class="card card--success">
+          <p class="card-label">Ventas totales</p>
+          <p class="card-value">{{ utmData.resumen.total_ventas | number }}</p>
+        </div>
+        <div class="card card--success">
+          <p class="card-label">Ventas atribuidas</p>
+          <p class="card-value">{{ utmData.resumen.ventas_atribuidas | number }}</p>
+          <p class="card-sub">{{ utmData.resumen.pct_ventas_atrib }}% de ventas</p>
+        </div>
+      </div>
+
+      <!-- Gráfica por fuente -->
+      <div class="charts-row" style="margin-top:1.5rem">
+        <div class="chart-card" style="grid-column: 1 / -1">
+          <div class="chart-header">
+            <h3 class="chart-title">Leads y ventas por fuente UTM</h3>
+            <button class="info-btn" (click)="showInfo('utm')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
+          <div class="chart-wrap" style="height:260px"><canvas #utmFuenteChart></canvas></div>
+        </div>
+      </div>
+
+      <!-- Tabla por campaña -->
+      @if (utmData.por_campana.length > 0) {
+        <div class="table-card" style="margin-top:1.5rem">
+          <div class="table-header">
+            <h3 class="table-title">Por campaña</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Campaña</th>
+                  <th>Fuente</th>
+                  <th>Medio</th>
+                  <th style="text-align:right">Leads</th>
+                  <th style="text-align:right">Prospectos</th>
+                  <th style="text-align:right">Ventas</th>
+                  <th style="text-align:right">Tasa</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (row of utmData.por_campana; track row.campana) {
+                  <tr>
+                    <td>{{ row.campana }}</td>
+                    <td>{{ row.fuente }}</td>
+                    <td>{{ row.medio }}</td>
+                    <td style="text-align:right">{{ row.total }}</td>
+                    <td style="text-align:right">{{ row.prospectos }}</td>
+                    <td style="text-align:right">{{ row.ventas }}</td>
+                    <td style="text-align:right">
+                      <span class="badge" [ngClass]="{'badge-green': row.tasa >= 10, 'badge-blue': row.tasa > 0 && row.tasa < 10}">
+                        {{ row.tasa }}%
+                      </span>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      } @else {
+        <div class="table-card" style="margin-top:1.5rem">
+          <div class="table-header"><h3 class="table-title">Por campaña</h3></div>
+          <p class="empty">Sin datos UTM aún — los leads capturados desde Meta Ads aparecerán aquí.</p>
+        </div>
+      }
+
+      <!-- Tabla por anuncio -->
+      @if (utmData.por_anuncio.length > 0) {
+        <div class="table-card" style="margin-top:1.5rem">
+          <div class="table-header">
+            <h3 class="table-title">Por anuncio (Ad ID)</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ad ID</th>
+                  <th>Campaña</th>
+                  <th style="text-align:right">Leads</th>
+                  <th style="text-align:right">Ventas</th>
+                  <th style="text-align:right">Tasa</th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (row of utmData.por_anuncio; track row.ad_id) {
+                  <tr>
+                    <td class="mono">{{ row.ad_id }}</td>
+                    <td>{{ row.campana }}</td>
+                    <td style="text-align:right">{{ row.total }}</td>
+                    <td style="text-align:right">{{ row.ventas }}</td>
+                    <td style="text-align:right">{{ row.tasa }}%</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+
+    }
+
+    <!-- ═══════════════════════════════════════════════════════════
+         SECCIÓN MEGACABLE
+    ════════════════════════════════════════════════════════════════ -->
+    <div class="section-divider">
+      <span>Megacable</span>
+    </div>
+
+    <div class="filters">
+      <div class="filter-group">
+        <label>Desde</label>
+        <input type="date" [(ngModel)]="mgDesde" />
+      </div>
+      <div class="filter-group">
+        <label>Hasta</label>
+        <input type="date" [(ngModel)]="mgHasta" />
+      </div>
+      <button class="btn-primary" (click)="applyMgFilter()">Filtrar</button>
+      <button class="btn-ghost" (click)="clearMgFilter()">Limpiar</button>
+    </div>
+
+    @if (megacableLoading) {
+      <div class="loading-state">Cargando datos Megacable…</div>
+    } @else if (megacableError) {
+      <div class="error-state">{{ megacableError }}</div>
+    } @else if (megacableData) {
+
+      <!-- KPI cards Megacable -->
+      <div class="cards">
+        <div class="card">
+          <p class="card-label">Conversaciones</p>
+          <p class="card-value">{{ megacableData.resumen.total | number }}</p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">Cerradas</p>
+          <p class="card-value">{{ megacableData.resumen.cerradas | number }}</p>
+          <p class="card-sub">de {{ megacableData.resumen.total }}</p>
+        </div>
+        <div class="card">
+          <p class="card-label">Abiertas</p>
+          <p class="card-value">{{ megacableData.resumen.abiertas | number }}</p>
+        </div>
+        <div class="card card--warning">
+          <p class="card-label">Escaladas</p>
+          <p class="card-value">{{ megacableData.resumen.escaladas | number }}</p>
+        </div>
+        <div class="card card--info">
+          <p class="card-label">T. 1ª Respuesta</p>
+          <p class="card-value">{{ formatSecs(megacableData.resumen.avg_primera_resp_segs) }}</p>
+          <p class="card-sub">promedio</p>
+        </div>
+        <div class="card">
+          <p class="card-label">T. Cierre Promedio</p>
+          <p class="card-value">{{ formatSecs(megacableData.resumen.avg_cierre_segs) }}</p>
+        </div>
+      </div>
+
+      <!-- Gráficas Megacable -->
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3 class="chart-title">Distribución por estado</h3>
+            <button class="info-btn" (click)="showInfo('megacable')" title="Cómo leer esta gráfica">ⓘ</button>
+          </div>
+          <div class="chart-wrap"><canvas #mgEstadoChart></canvas></div>
+        </div>
+        <div class="chart-card">
+          <h3 class="chart-title">Mensajes por actor</h3>
+          <div class="chart-wrap"><canvas #mgActorChart></canvas></div>
+        </div>
+      </div>
+
+      <!-- Intents -->
+      @if (megacableData.intents.length > 0) {
+        <div class="table-card" style="margin-top:1.5rem">
+          <div class="table-header">
+            <h3 class="table-title">Intenciones detectadas</h3>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Intent</th><th style="text-align:right">Cantidad</th></tr></thead>
+              <tbody>
+                @for (intent of megacableData.intents; track intent.intent) {
+                  <tr>
+                    <td>{{ intent.intent }}</td>
+                    <td style="text-align:right">{{ intent.cantidad }}</td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+
+      <!-- Tabla conversaciones Megacable -->
+      <div class="table-card" style="margin-top:1.5rem">
+        <div class="table-header">
+          <h3 class="table-title">Conversaciones recientes</h3>
+          <span class="table-count">{{ megacableData.conversaciones.length }} registros</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Teléfono</th>
+                <th>Estado</th>
+                <th>Inicio</th>
+                <th>Cierre</th>
+                <th>Escalada</th>
+                <th>Msgs Cliente</th>
+                <th>Msgs Bot</th>
+                <th>Msgs Asesor</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (c of megacableData.conversaciones; track c.conversation_id) {
+                <tr>
+                  <td>{{ c.phone }}</td>
+                  <td>
+                    <span class="badge" [ngClass]="{
+                      'badge-green': c.estado === 'cerrada',
+                      'badge-blue': c.estado === 'abierta'
+                    }">{{ c.estado }}</span>
+                  </td>
+                  <td>{{ c.created_at ? (c.created_at | date:'dd/MM HH:mm') : '—' }}</td>
+                  <td>{{ c.closed_at ? (c.closed_at | date:'dd/MM HH:mm') : '—' }}</td>
+                  <td>{{ c.escalated_at ? (c.escalated_at | date:'dd/MM HH:mm') : '—' }}</td>
+                  <td style="text-align:center">{{ c.msgs_cliente }}</td>
+                  <td style="text-align:center">{{ c.msgs_bot }}</td>
+                  <td style="text-align:center">{{ c.msgs_humano }}</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    }
+
+  </main>
+
+  <!-- ── Modal de información de gráfica ── -->
+  @if (activeInfo && CHART_INFO[activeInfo]) {
+    <div class="info-overlay" (click)="closeInfo()">
+      <div class="info-modal" (click)="$event.stopPropagation()">
+        <div class="info-modal-header">
+          <h2>{{ CHART_INFO[activeInfo].titulo }}</h2>
+          <button class="info-modal-close" (click)="closeInfo()">✕</button>
+        </div>
+        <div class="info-modal-body">
+          <p class="info-fuente"><strong>Fuente:</strong> {{ CHART_INFO[activeInfo].fuente }}</p>
+          <div class="info-section">
+            <h4>¿Qué mide?</h4>
+            <p>{{ CHART_INFO[activeInfo].que_mide }}</p>
+          </div>
+          <div class="info-section">
+            <h4>¿Cómo leerlo?</h4>
+            <ul>
+              @for (item of CHART_INFO[activeInfo].como_leer; track item) {
+                <li>{{ item }}</li>
+              }
+            </ul>
+          </div>
+          @if (CHART_INFO[activeInfo].alertas.length) {
+            <div class="info-section info-alertas">
+              <h4>🚨 Señales de alerta</h4>
+              <ul>
+                @for (alerta of CHART_INFO[activeInfo].alertas; track alerta) {
+                  <li>{{ alerta }}</li>
+                }
+              </ul>
+            </div>
+          }
+        </div>
+      </div>
+    </div>
+  }
+</div>
