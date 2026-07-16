@@ -22,6 +22,7 @@ from agents.portabilidad.graph import get_agent_graph
 from config.settings import settings
 from integrations import debounce
 from integrations.bitrix import connector as bitrix_connector
+from integrations.postgres import client as db
 from integrations.redis_client import get_redis
 from integrations.whatsapp.client import WhatsAppClient
 from integrations.whatsapp.handlers import parse_whatsapp_message, verify_webhook_signature
@@ -34,6 +35,15 @@ _wa = WhatsAppClient()
 
 async def _process_message(phone: str, text: str) -> None:
     """Callback que recibe el texto ya agrupado y corre el agente."""
+    # Mismo guard que en receive_message: si el deal quedó WON durante este turno
+    # (ej. lo cerró un asesor mientras corría el debounce), no espejear la
+    # respuesta del bot a Bitrix — evita reabrir la sesión de Open Lines.
+    try:
+        lead_row = await db.fetchrow("SELECT bitrix_stage FROM leads WHERE telefono = $1", phone)
+        skip_mirror = bool(lead_row and lead_row["bitrix_stage"] == "C90:WON")
+    except Exception:
+        skip_mirror = False
+
     config = {"configurable": {"thread_id": phone}}
     try:
         result = await get_agent_graph().ainvoke(
@@ -65,6 +75,9 @@ async def _process_message(phone: str, text: str) -> None:
             logger.info("whatsapp_message_sent", extra={"phone_tail": phone[-4:]})
         except Exception as exc:
             logger.error("whatsapp_send_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+
+        if skip_mirror:
+            continue
 
         try:
             await bitrix_connector.send_bot_message(phone, content)
@@ -121,11 +134,43 @@ async def receive_message(request: Request) -> dict:
     # Marcar como leído inmediatamente (muestra doble check azul al usuario)
     await _wa.mark_as_read(message_id)
 
-    # Espejear mensaje del usuario en Bitrix Open Lines (por mensaje, no por turno)
+    # Guard: si el deal ya está cerrado en Bitrix, espejear el mensaje reabre una
+    # sesión de Open Lines sobre un diálogo ya finalizado y Bitrix crea un deal
+    # duplicado. C90:WON: no espejear (venta cerrada, el bot sigue respondiendo
+    # solo por WhatsApp). C90:LOSE: reactivar el deal antes de espejear para que
+    # la sesión no se abra sobre un deal cerrado.
     try:
-        await bitrix_connector.send_user_message(phone, text)
+        lead_row = await db.fetchrow(
+            "SELECT bitrix_stage, bitrix_lead_id FROM leads WHERE telefono = $1", phone
+        )
     except Exception as exc:
-        logger.error("connector_user_msg_failed", extra={"error": str(exc)})
+        logger.warning("webhook_lead_lookup_failed", extra={"error": str(exc)})
+        lead_row = None
+
+    stage = lead_row["bitrix_stage"] if lead_row else ""
+    deal_id = lead_row["bitrix_lead_id"] if lead_row else ""
+    skip_mirror = False
+
+    if stage == "C90:WON":
+        skip_mirror = True
+        logger.info("webhook_skip_mirror_deal_won", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
+    elif stage == "C90:LOSE" and deal_id:
+        try:
+            from integrations.bitrix.client import BitrixClient
+            await BitrixClient().mover_etapa(deal_id, "C90:PREPAYMENT_INVOIC")
+            await db.execute(
+                "UPDATE leads SET bitrix_stage = 'C90:PREPAYMENT_INVOIC' WHERE telefono = $1", phone
+            )
+            logger.info("webhook_deal_reactivado", extra={"phone_tail": phone[-4:], "deal_id": deal_id})
+        except Exception as exc:
+            logger.warning("webhook_deal_reactivacion_error", extra={"phone_tail": phone[-4:], "error": str(exc)})
+
+    # Espejear mensaje del usuario en Bitrix Open Lines (por mensaje, no por turno)
+    if not skip_mirror:
+        try:
+            await bitrix_connector.send_user_message(phone, text)
+        except Exception as exc:
+            logger.error("connector_user_msg_failed", extra={"error": str(exc)})
 
     # Registrar mensaje del usuario en bitrix_eventos (en background)
     import asyncio as _asyncio
