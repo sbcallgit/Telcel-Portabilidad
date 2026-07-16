@@ -71,3 +71,10 @@ Reporta al usuario cuántos registros quedaron (debe ser 0 en todos).
   mismo bloque sin avisar. El script ya evita esto (cada `conn.execute()` es su propia
   sentencia); si se limpia a mano, correr un `-c` por tabla o borrar primero las tablas
   dependientes.
+- **Los teléfonos de prueba caen en la cola real de Open Lines de producción** — un asesor
+  de Callcom puede ver, responder y mover de etapa la conversación de prueba en tiempo real
+  (ocurrió durante la verificación del fix de deals duplicados del 2026-07-16, deal `2428056`
+  del teléfono `593991053639`: un asesor pausó el bot y movió el deal manualmente mientras se
+  probaba). No hay línea de Open Lines separada para pruebas — correr `/reset-test` al
+  terminar para no dejar ruido en la cola real, y considerar avisar al equipo si la prueba
+  va a tomar varios mensajes.
