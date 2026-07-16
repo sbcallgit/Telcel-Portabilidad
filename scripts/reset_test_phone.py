@@ -9,6 +9,7 @@ Ejemplo:
 Limpia:
   - Redis: todas las llaves relacionadas al teléfono
   - PostgreSQL: checkpoints de LangGraph + leads + bitrix_eventos + bitrix_deal_timeline
+    + kpi_conversaciones
   - Bitrix: deals, contacto y sesión de Open Lines
 """
 
@@ -119,6 +120,16 @@ async def limpiar_postgres(phone: str) -> None:
 
     log.info(f"PostgreSQL bitrix_eventos: {ev_total} filas eliminadas")
     log.info(f"PostgreSQL bitrix_deal_timeline: {tl_total} filas eliminadas")
+
+    # Snapshot de KPIs (job_kpi_export nocturno)
+    kpi_total = 0
+    for v in variantes:
+        n = await conn.execute(
+            "DELETE FROM kpi_conversaciones WHERE id_conversacion = $1", v
+        )
+        kpi_total += int(n.split()[-1])
+
+    log.info(f"PostgreSQL kpi_conversaciones: {kpi_total} filas eliminadas")
 
     await conn.close()
 

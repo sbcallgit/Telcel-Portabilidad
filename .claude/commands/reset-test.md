@@ -32,6 +32,8 @@ El script limpia en este orden:
    - Fila en `leads` (con sus dependientes `seguimientos_log`, `seguimientos_fallidos`)
    - Registros en `bitrix_eventos` (`id_conversacion` y `telefono`)
    - Registros en `bitrix_deal_timeline` (`id_conversacion` y `telefono`)
+   - Registros en `kpi_conversaciones` (`id_conversacion`) — snapshot del job nocturno,
+     si no se borra la conversación de prueba reaparece en el dashboard/reporte KPI
 
 3. **Bitrix** — en este orden:
    - Busca el contacto por teléfono (`crm.duplicate.findbycomm`)
@@ -62,3 +64,10 @@ Reporta al usuario cuántos registros quedaron (debe ser 0 en todos).
   y PostgreSQL ya se habrán completado.
 - Para limpiar **todos** los teléfonos de prueba a la vez, usa `/reset-test` sin argumento
   y el agente pedirá confirmación antes de hacer FLUSHDB en Redis y TRUNCATE en PostgreSQL.
+- **Si se limpia a mano con `psql -c` en vez del script:** no encadenar varios `DELETE`
+  separados por `;` en un solo `-c` cuando alguno pueda fallar por foreign key (ej. `leads`
+  referenciado por `seguimientos_log`) — `psql -c` con múltiples sentencias corre como una
+  sola transacción implícita, así que un error revierte también los `DELETE` anteriores del
+  mismo bloque sin avisar. El script ya evita esto (cada `conn.execute()` es su propia
+  sentencia); si se limpia a mano, correr un `-c` por tabla o borrar primero las tablas
+  dependientes.
