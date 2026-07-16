@@ -29,6 +29,7 @@ STAGE_RESCATE3 = "C90:3"
 MIN_SILENCIO = 30        # minutos sin mensaje del usuario antes de enviar seguimiento
 MIN_RESCATE2 = 60        # minutos en C90:1 antes de enviar Rescate 2
 MIN_RESCATE3 = 120       # minutos en C90:2 antes de disparar llamada Vicidial
+STAGES_TERMINALES = {"C90:WON", "C90:LOSE"}
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,37 @@ async def minutos_desde_ultimo_mensaje(phone: str) -> float | None:
     return delta.total_seconds() / 60
 
 
+async def _deal_ya_cerrado(deal_id: str, lead_id: int) -> bool:
+    """Verifica el stage real en Bitrix antes de mover un deal a un Rescate.
+
+    leads.bitrix_stage solo se sincroniza cada 30 min (job_bitrix_sync), pero este job
+    corre cada 5 min — si un asesor cierra la venta (C90:WON) o marca el deal como
+    Caído (C90:LOSE) en esa ventana, la copia local queda desactualizada y el job
+    puede degradar un deal ya cerrado de vuelta al embudo de Rescate. Se consulta
+    Bitrix en vivo justo antes de actuar para evitar sobrescribir un cierre real.
+    """
+    try:
+        from integrations.bitrix.client import BitrixClient
+        bx = BitrixClient()
+        deal = await bx.get_deal(deal_id)
+        stage_real = deal.get("STAGE_ID", "")
+    except Exception as exc:
+        logger.warning("bitrix_stage_check_error", extra={"deal_id": deal_id, "lead_id": lead_id, "error": str(exc)})
+        return False
+
+    if stage_real in STAGES_TERMINALES:
+        await db.execute(
+            "UPDATE leads SET bitrix_stage = $1, updated_at = NOW() WHERE id = $2",
+            stage_real, lead_id,
+        )
+        logger.info(
+            "seguimiento_abortado_deal_cerrado",
+            extra={"lead_id": lead_id, "deal_id": deal_id, "stage_real": stage_real},
+        )
+        return True
+    return False
+
+
 async def _mover_a_rescate1(lead_id: int, deal_id: str) -> None:
     """Mueve el deal a Rescate 1 (C90:1) en Bitrix y actualiza leads.bitrix_stage."""
     try:
@@ -179,6 +211,9 @@ async def _procesar_rescate3(row: dict) -> None:
         lead_id, STAGE_RESCATE3,
     )
     if ya_enviado:
+        return
+
+    if deal_id and await _deal_ya_cerrado(deal_id, lead_id):
         return
 
     from integrations.vicidial.client import agregar_lead
@@ -339,6 +374,9 @@ async def _procesar_lead(row: dict) -> None:
         logger.info("seguimiento_skip_idempotencia", extra={"lead_id": lead_id})
         return
 
+    if deal_id and await _deal_ya_cerrado(deal_id, lead_id):
+        return
+
     try:
         texto = await _generar_mensaje_rescate(row, rescate=1)
         await _enviar_seguimiento(lead_id, phone, texto, bitrix_stage, num_enviados)
@@ -410,6 +448,9 @@ async def _procesar_rescate2(row: dict) -> None:
         lead_id,
     )
     if ya_enviado:
+        return
+
+    if deal_id and await _deal_ya_cerrado(deal_id, lead_id):
         return
 
     try:

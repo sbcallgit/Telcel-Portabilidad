@@ -125,7 +125,7 @@ Duración: 3m 37s
 - **Diagnosticar por qué un deal cayó** — ver el último mensaje del cliente antes de `→ Caído`. Si dice "no me interesa" el lead era frío. Si dice "qué promoción tienen" y cayó, el asesor nunca lo contactó.
 - **Medir velocidad del bot** — la duración en `IA Porta` muestra cuánto tarda el bot en completar el flujo. Menos de 5 minutos es buena señal.
 - **Auditar asesores** — filtrar por asesor y ver qué deals convierte vs. cuáles deja caer.
-- **Detectar loops de rescate** — si el mismo deal aparece varias veces (`Rescate 1 → Caído → Rescate 1 → Caído`), hay un problema de sincronización en `job_bitrix_sync`.
+- **Detectar loops de rescate** — si el mismo deal aparece varias veces (`Rescate 1 → Caído → Rescate 1 → Caído`), hay un problema de sincronización en `job_bitrix_sync`. Caso real detectado el 2026-07-15: deals que llegaban a `Venta` eran degradados minutos después de vuelta a `Rescate 1/2/3` porque `job_seguimientos` decidía con `leads.bitrix_stage` (rezago de hasta 30 min) en vez del stage real de Bitrix — ver "Verificación en vivo antes de actuar" en `CLAUDE.md`. Si se ve un patrón `Venta → Rescate N` en el timeline, es la señal de este bug (ya corregido).
 
 ---
 

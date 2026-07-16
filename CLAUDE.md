@@ -423,7 +423,8 @@ El nodo de objeciones busca en Qdrant la respuesta más relevante por similitud 
 - **LADAs:** tabla técnica, no parte del guion. El bot la consulta internamente para decidir si continúa el flujo o deriva a CAC.
 - **Versiones de prompt:** editar los archivos en `prompts/` directamente. Para historial de versiones usar git. La carpeta `knowledge/prompts/` es para specs de auditoría, no para los prompts activos.
 - **APScheduler:** corre dentro del proceso FastAPI (lifespan). Jobs activos: `bitrix_sync` (cada 30 min), `kpi_export` (cron 3am Monterrey) y `job_seguimientos` (cada 5 min, L-S 9am–9pm). El scheduler se inicia en `api/main.py` con `create_scheduler().start()` y se apaga con `scheduler.shutdown(wait=False)`.
-- **`SEGUIMIENTOS_TEST_PHONE`:** cuando está definido en `.env`, `job_seguimientos` solo procesa ese teléfono (modo validación). Para producción general dejar vacío (`SEGUIMIENTOS_TEST_PHONE=`) y hacer rebuild. Actualmente activo con el teléfono de prueba `593991053639`.
+- **`SEGUIMIENTOS_TEST_PHONE`:** cuando está definido en `.env`, `job_seguimientos` solo procesa ese teléfono (modo validación). Para producción general dejar vacío (`SEGUIMIENTOS_TEST_PHONE=`) y hacer rebuild. Actualmente vacío — el job corre en modo producción general, sobre todos los leads.
+- **Fix "venta degradada por Rescate" (2026-07-15):** `job_seguimientos` excluía leads en `C90:WON`/`C90:LOSE` consultando la copia local `leads.bitrix_stage`, sincronizada solo cada 30 min por `job_bitrix_sync`. Como el job corre cada 5 min, si un asesor cerraba una venta (mover a `C90:WON`) dentro de esa ventana de 30 min, el job no lo detectaba, enviaba el mensaje de rescate y movía el deal de vuelta a `C90:1`/`C90:2`/`C90:3` en Bitrix — sobrescribiendo la venta real. Se detectaron 30 deals afectados (todos los `C90:WON` del 13-15 de julio terminaron degradados minutos u horas después, lo que hacía ver 0% de conversión en el reporte diario y en el dashboard aunque sí hubiera ventas reales). Fix: `_deal_ya_cerrado(deal_id, lead_id)` en `jobs/seguimientos.py` consulta el stage real en Bitrix (`crm.deal.get`) justo antes de mover un deal o enviar un mensaje de rescate (en `_procesar_lead`, `_procesar_rescate2` y `_procesar_rescate3`); si el stage real ya es `C90:WON` o `C90:LOSE`, aborta sin enviar mensaje ni mover el deal, y sincroniza `leads.bitrix_stage` con el valor real. Los deals ya degradados antes del fix requieren corrección manual en Bitrix (moverlos de vuelta a `C90:WON`).
 - **Lógica Rescate 1 simplificada:** `_procesar_lead` no usa cadencias por stage. Condiciones para enviar: (1) 30+ min de silencio del usuario (checkpoint LangGraph), (2) 30+ min desde el último seguimiento enviado (`leads.ultimo_seguimiento`), (3) `seguimientos_enviados < MAX_SEGUIMIENTOS` (5). Ambas condiciones de tiempo deben cumplirse — la segunda evita spam entre ciclos de 5 min cuando el usuario no responde. Aplica a cualquier stage excepto `C90:WON`, `C90:LOSE`, `C90:1`, `C90:2`, `C90:3`. El filtro SQL usa `$1` como único parámetro cuando `SEGUIMIENTOS_TEST_PHONE` está activo.
 - **Bug seguimientos ilimitados (resuelto):** dos correcciones acumuladas: (a) guardia `if num_enviados >= MAX_SEGUIMIENTOS: return` al inicio de `_procesar_lead`; (b) gate de 30 min sobre `leads.ultimo_seguimiento` — sin este gate, el bot podía enviar hasta 5 mensajes en ~25 min porque los seguimientos no generan checkpoints LangGraph y el timer de silencio del usuario nunca avanzaba. Las variables `_CADENCIAS`, `_CADENCIA_DEFAULT`, `_cadencia()` y `_siguiente_envio()` (código muerto de versión anterior con cadencias por stage) fueron eliminadas.
 - **Jobs timezone:** siempre `America/Monterrey` explícito. El horario de portabilidad es L-S 9am–9pm; sin domingos.
@@ -510,12 +511,16 @@ Solo se envía a leads con `bitrix_stage = 'C90:1'` (Rescate 1 ya enviado).
 
 Solo se envía a leads con `bitrix_stage = 'C90:2'` (Rescate 2 ya enviado).
 
+### Verificación en vivo antes de actuar (`_deal_ya_cerrado`)
+
+Las exclusiones de arriba se calculan con el filtro SQL sobre `leads.bitrix_stage` (columna local, con hasta 30 min de rezago frente a Bitrix). Antes de enviar el mensaje o mover el deal, `_procesar_lead`, `_procesar_rescate2` y `_procesar_rescate3` llaman `_deal_ya_cerrado(deal_id, lead_id)`, que consulta `crm.deal.get` en vivo. Si el stage real ya es `C90:WON` o `C90:LOSE`, el job aborta sin enviar mensaje ni mover el deal — solo sincroniza `leads.bitrix_stage` con el valor real. Esto evita que una venta cerrada por el asesor dentro de la ventana de 30 min entre syncs sea degradada de vuelta al embudo de Rescate.
+
 ### Jobs relacionados
 
 | Job | Archivo | Frecuencia | Estado |
 |---|---|---|---|
 | `job_bitrix_sync` | `jobs/bitrix_sync.py` | Cada 30 min | **Activo** |
-| `job_seguimientos` | `jobs/seguimientos.py` | Cada 5 min, L-S 9am–9pm | **Activo** (modo test — solo `SEGUIMIENTOS_TEST_PHONE`) |
+| `job_seguimientos` | `jobs/seguimientos.py` | Cada 5 min, L-S 9am–9pm | **Activo** (producción general — `SEGUIMIENTOS_TEST_PHONE` vacío) |
 | `job_kpi_export` | `jobs/kpi_export.py` | Diario 3am Monterrey | **Activo** |
 | `send_kpi_report` | `jobs/email_report.py` | Diario 00:00 Monterrey | **Activo** |
 
